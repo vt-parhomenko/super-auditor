@@ -1,0 +1,259 @@
+/*
+ * Дизайн-токени Super Auditor.
+ * Світла тема — базова в :root; темна перевизначається трьома шляхами,
+ * щоб перемикач працював в обидва боки незалежно від системної теми.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Поверхні */
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #fafbfc;
+  --surface-3: #eef0f3;
+  --surface-inset: #f7f8fa;
+  --overlay: rgba(17, 20, 24, 0.42);
+
+  /* Межі */
+  --border: #d8dce2;
+  --border-strong: #b9c0ca;
+  --border-subtle: #e6e9ed;
+
+  /* Текст */
+  --text: #14181d;
+  --text-2: #4c555f;
+  --text-3: #79828d;
+  --text-inverse: #ffffff;
+
+  /* Акцент */
+  --accent: #2f5fd0;
+  --accent-hover: #2650b4;
+  --accent-soft: #e7edfb;
+  --accent-text: #1f4199;
+  --focus-ring: #2f5fd0;
+
+  /* Семантика */
+  --danger: #b3261e;
+  --danger-soft: #fbe9e7;
+  --warn: #8a5a00;
+  --warn-soft: #fdf1d8;
+  --ok: #1f6b40;
+  --ok-soft: #e4f3ea;
+
+  /* ── Вердикти ───────────────────────────────────────────────────────────
+   * Розрізняються не лише відтінком, а й насиченістю фону + патерном
+   * (див. --v-*-pattern у heatmap), щоб матриця читалась при дальтонізмі. */
+  --v-compliant: #1f7a4d;
+  --v-compliant-bg: #d6efe0;
+  --v-compliant-fg: #10462b;
+
+  --v-partial: #9a6400;
+  --v-partial-bg: #fbe9c0;
+  --v-partial-fg: #5c3c00;
+
+  --v-non-compliant: #b3261e;
+  --v-non-compliant-bg: #f7cfcc;
+  --v-non-compliant-fg: #6d1611;
+
+  --v-not-addressed: #6b4fa8;
+  --v-not-addressed-bg: #e6dcf7;
+  --v-not-addressed-fg: #3d2a68;
+
+  --v-needs-review: #0f6f86;
+  --v-needs-review-bg: #d3ecf3;
+  --v-needs-review-fg: #08404f;
+
+  --v-not-applicable: #7a828c;
+  --v-not-applicable-bg: #e9ebee;
+  --v-not-applicable-fg: #4a5159;
+
+  /* Severity */
+  --s-critical: #a01109;
+  --s-critical-bg: #f7cfcc;
+  --s-major: #9a5300;
+  --s-major-bg: #fbe0c2;
+  --s-minor: #1f6b7a;
+  --s-minor-bg: #d8eef3;
+  --s-recommendation: #55606b;
+  --s-recommendation-bg: #e9ebee;
+
+  /* Типографіка */
+  --font-ui: system-ui, 'Segoe UI', 'Inter', 'Noto Sans', Arial, sans-serif;
+  --font-mono: 'Cascadia Mono', 'JetBrains Mono', 'Consolas', 'SF Mono', ui-monospace, monospace;
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 19px;
+  --fs-2xl: 24px;
+  --lh-tight: 1.25;
+  --lh: 1.5;
+
+  /* Метрика */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --radius-sm: 3px;
+  --radius: 5px;
+  --radius-lg: 8px;
+  --row-h: 28px;
+  --sidebar-w: 208px;
+  --topbar-h: 44px;
+
+  --shadow-1: 0 1px 2px rgba(16, 22, 30, 0.08);
+  --shadow-2: 0 4px 16px rgba(16, 22, 30, 0.14);
+  --shadow-3: 0 16px 48px rgba(16, 22, 30, 0.22);
+}
+
+/* Темна тема: системна перевага, якщо користувач не зафіксував світлу */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+
+    --bg: #0f1216;
+    --surface: #171b21;
+    --surface-2: #1c2128;
+    --surface-3: #232932;
+    --surface-inset: #12161b;
+    --overlay: rgba(0, 0, 0, 0.6);
+
+    --border: #2c333d;
+    --border-strong: #3d4551;
+    --border-subtle: #232932;
+
+    --text: #e6eaf0;
+    --text-2: #a7b1bd;
+    --text-3: #78828e;
+    --text-inverse: #0f1216;
+
+    --accent: #6d9bff;
+    --accent-hover: #86adff;
+    --accent-soft: #1d2a44;
+    --accent-text: #a8c4ff;
+    --focus-ring: #6d9bff;
+
+    --danger: #ff8b83;
+    --danger-soft: #3a1d1b;
+    --warn: #e5b45a;
+    --warn-soft: #382c15;
+    --ok: #6cd39a;
+    --ok-soft: #12301f;
+
+    --v-compliant: #5fc78f;
+    --v-compliant-bg: #14382a;
+    --v-compliant-fg: #a7e8c4;
+
+    --v-partial: #e0ac4d;
+    --v-partial-bg: #3c2f12;
+    --v-partial-fg: #f4d59a;
+
+    --v-non-compliant: #ff8b83;
+    --v-non-compliant-bg: #451f1c;
+    --v-non-compliant-fg: #ffbcb6;
+
+    --v-not-addressed: #b39aec;
+    --v-not-addressed-bg: #2b2246;
+    --v-not-addressed-fg: #d7c8ff;
+
+    --v-needs-review: #57bcd6;
+    --v-needs-review-bg: #10333d;
+    --v-needs-review-fg: #a4dced;
+
+    --v-not-applicable: #8b949f;
+    --v-not-applicable-bg: #242a32;
+    --v-not-applicable-fg: #b6bec8;
+
+    --s-critical: #ff8b83;
+    --s-critical-bg: #451f1c;
+    --s-major: #e5a55a;
+    --s-major-bg: #3b2a13;
+    --s-minor: #62c0d4;
+    --s-minor-bg: #123039;
+    --s-recommendation: #9aa4b0;
+    --s-recommendation-bg: #242a32;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.62);
+  }
+}
+
+/* Явно вибрана темна тема — виграє над системною світлою */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0f1216;
+  --surface: #171b21;
+  --surface-2: #1c2128;
+  --surface-3: #232932;
+  --surface-inset: #12161b;
+  --overlay: rgba(0, 0, 0, 0.6);
+
+  --border: #2c333d;
+  --border-strong: #3d4551;
+  --border-subtle: #232932;
+
+  --text: #e6eaf0;
+  --text-2: #a7b1bd;
+  --text-3: #78828e;
+  --text-inverse: #0f1216;
+
+  --accent: #6d9bff;
+  --accent-hover: #86adff;
+  --accent-soft: #1d2a44;
+  --accent-text: #a8c4ff;
+  --focus-ring: #6d9bff;
+
+  --danger: #ff8b83;
+  --danger-soft: #3a1d1b;
+  --warn: #e5b45a;
+  --warn-soft: #382c15;
+  --ok: #6cd39a;
+  --ok-soft: #12301f;
+
+  --v-compliant: #5fc78f;
+  --v-compliant-bg: #14382a;
+  --v-compliant-fg: #a7e8c4;
+
+  --v-partial: #e0ac4d;
+  --v-partial-bg: #3c2f12;
+  --v-partial-fg: #f4d59a;
+
+  --v-non-compliant: #ff8b83;
+  --v-non-compliant-bg: #451f1c;
+  --v-non-compliant-fg: #ffbcb6;
+
+  --v-not-addressed: #b39aec;
+  --v-not-addressed-bg: #2b2246;
+  --v-not-addressed-fg: #d7c8ff;
+
+  --v-needs-review: #57bcd6;
+  --v-needs-review-bg: #10333d;
+  --v-needs-review-fg: #a4dced;
+
+  --v-not-applicable: #8b949f;
+  --v-not-applicable-bg: #242a32;
+  --v-not-applicable-fg: #b6bec8;
+
+  --s-critical: #ff8b83;
+  --s-critical-bg: #451f1c;
+  --s-major: #e5a55a;
+  --s-major-bg: #3b2a13;
+  --s-minor: #62c0d4;
+  --s-minor-bg: #123039;
+  --s-recommendation: #9aa4b0;
+  --s-recommendation-bg: #242a32;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 16px 48px rgba(0, 0, 0, 0.62);
+}
+
+/* Явно вибрана світла — гарантує світлі значення попри системну темну */
+:root[data-theme='light'] {
+  color-scheme: light;
+}

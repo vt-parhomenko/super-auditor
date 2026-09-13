@@ -1,0 +1,14 @@
+# Нормалізація переносів рядків. Задано до першого коміту — пізніше це дало б
+# разовий діф на весь репозиторій.
+* text=auto eol=lf
+
+# Бінарні дані: не чіпати й не показувати як текст у діфах.
+*.pdf   binary
+*.docx  binary
+*.png   binary
+*.jpg   binary
+*.ico   binary
+*.node  binary
+
+# Згенеровані файли — згортати в діфах на GitHub.
+package-lock.json linguist-generated=true

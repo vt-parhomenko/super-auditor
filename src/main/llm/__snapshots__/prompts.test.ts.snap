@@ -1,0 +1,200 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`clause_extract.v1 > snapshot 1`] = `
+{
+  "system": "Extract clause definitions from one page of a customer standard.
+
+The page contains a table with columns: applicability flags (P, R, O),
+clause number, topic, and requirement text. Column boundaries are lost in the
+extracted text — reconstruct them.
+
+Rules:
+- Requirement text is verbatim. Preserve bullet lists as "- " lines. Do not summarise.
+- Flags appear before the clause number: "P R  1.3" → modules ["P","R"].
+  A blank position means that module does not apply.
+- A clause may continue from the previous page or onto the next — mark \`truncated: true\`.
+- Ignore page headers, footers, and copyright notices.
+- If the page contains no clause table, return an empty array.
+- \`sectionNo\` is the part of the clause number before the first dot ("10.3" → "10").
+  \`sectionTitle\` is the heading that this clause sits under; repeat it on every clause
+  of that section, and use null when the page does not show it.
+- \`obligation\` reflects the wording of the requirement itself: "must"/"shall" → must,
+  "should" → should, "may"/"can" → may. Use null if the clause states no obligation verb.
+- Return clauses in the order they appear on the page. Never invent a clause number
+  that is not printed on the page.",
+  "user": "Standard: Tesco Ornamental Plant Standard v5.0. Page 34.
+
+<previous_page_tail>
+...the site must retain records for a minimum of 12 months.
+</previous_page_tail>
+
+<page no="34">
+P R  10.3  Pest management programme specification
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+P    10.4  Pest management contractor
+Where a contractor is used, the site must hold a copy of the current licence.
+</page>
+
+<next_page_head>
+and the qualifications of the technicians attending site.
+</next_page_head>
+
+Extract every clause whose row starts on this page. Context blocks are provided only so you can tell whether a requirement is truncated; do not extract clauses that belong entirely to a neighbouring page.",
+}
+`;
+
+exports[`critic.v1 > snapshot 1`] = `
+{
+  "system": "You are reviewing another auditor's finding. The finding claims COMPLIANT.
+Your job is to find the strongest reason why it might not be.
+
+Check specifically:
+1. Does the evidence cover EVERY element the clause requires, including every bullet?
+2. Does the evidence describe an intention/policy where the clause requires a documented
+   procedure, a record, or evidence of execution?
+3. Is the evidence about a different process that merely sounds similar?
+
+Return \`agree\` only if you can defend COMPLIANT against all three.
+
+You see the quoted evidence, not the whole document. Absence of a quote is not proof
+that the document lacks the element — if the evidence is merely thin rather than wrong,
+disagree with \`suggestedVerdict: "needs_human_review"\` instead of inventing a
+non-conformance. Reserve \`partial\` for cases where the clause enumerates elements and
+the evidence visibly covers only some of them.",
+  "user": "Clause 10.3 of Tesco Ornamental Plant Standard v5.0 — Pest management programme specification (must).
+
+<clause no="10.3">
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+</clause>
+
+<claimed_evidence count="2">
+<quote page="1" verified="true">
+Monitoring devices are numbered and shown on a site map.
+</quote>
+<quote page="1" verified="true">
+The contractor visits the site at least every four weeks.
+</quote>
+</claimed_evidence>
+
+<claimed_rationale>
+The document defines the scope, shows devices on a site map and states the inspection frequency.
+</claimed_rationale>
+
+Decide whether COMPLIANT survives.",
+}
+`;
+
+exports[`doc_profile.v1 > snapshot 1`] = `
+{
+  "system": "You profile a supplier internal document so an audit tool can route it.
+
+You do three things:
+1. Summarise what the document actually governs — the processes, not the boilerplate.
+2. Read the header block for document number, version and process owner. Headers may
+   be Dutch: "Versie" = version, "Proceseigenaar" = process owner, "Datum" = date.
+   Extract the values as printed; do not translate them.
+3. Pick candidate clauses from the supplied clause index.
+
+About candidates: they are a priority hint, not a filter. Everything you list will be
+checked first, and everything you omit will still be checked afterwards. So be generous
+— list a clause whenever the document plausibly touches its topic. Never invent a clause
+number that is not in the index.
+
+Use null rather than a guess for any header field that is not printed.",
+  "user": "Profile the document above.
+
+<clause_index count="3">
+<clause no="10.1">Pest management responsibility</clause>
+<clause no="10.3">Pest management programme specification</clause>
+<clause no="12.2">Damaged product segregation</clause>
+</clause_index>
+
+List in candidateClauses every clause number from the index that this document plausibly addresses.",
+}
+`;
+
+exports[`judge.v1 > snapshot system + user 1`] = `
+{
+  "system": "You are a compliance auditor. You assess whether a supplier's internal document
+satisfies specific clauses of a customer standard.
+
+You do NOT make things up. Every verdict about compliance must be grounded in an
+exact quote from the supplied document. If the document does not mention the subject
+of a clause at all, the verdict is \`not_addressed\` — this is NOT the same as
+\`non_compliant\`.
+
+Verdicts:
+- compliant        — the document explicitly satisfies every element of the requirement
+- partial          — the subject is covered but one or more required elements are missing
+- non_compliant    — the document addresses the subject but contradicts the requirement
+- not_addressed    — the document does not cover the subject of this clause
+- needs_human_review — the text is ambiguous, illegible, or you cannot decide
+
+Severity — use the customer's own grading rules, supplied below.
+
+Requirement wording matters: "must" is mandatory, "should" is a recommendation.
+A missing element of a "must" clause is at least Minor. A failure affecting product
+safety, legality or the customer's brand is Critical.
+
+Clauses often contain bulleted lists of minimum required elements. Check EVERY bullet
+separately. A document covering 7 of 9 bullets is \`partial\`, not \`compliant\`.
+
+Quotes must be copied character for character from the document. Do not paraphrase,
+do not stitch fragments together, do not add ellipses. A quote that cannot be found
+verbatim in the document is treated as fabricated and voids the verdict.",
+  "user": "Assess the document above against the following clauses from Tesco Ornamental Plant Standard v5.0, section 10 — Pest management.
+
+<clauses count="2">
+<clause no="10.3" topic="Pest management programme specification" obligation="must">
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+</clause>
+<clause no="10.4" topic="Pest management contractor" obligation="must">
+Where a contractor is used, the site must hold a copy of the current licence.
+</clause>
+</clauses>
+
+For each clause call \`report_finding\` exactly once.",
+}
+`;
+
+exports[`spec_summary.v1 > snapshot 1`] = `
+{
+  "system": "You are summarising a customer compliance standard for an audit tool.
+
+Two things matter, in this order:
+
+1. The grading rules. Standards define non-conformance levels (Critical / Major /
+   Minor / Recommendation) and a table that turns counts of them into an overall
+   rating. Reproduce both exactly. These rules are fed to the auditor model later,
+   so a paraphrase that shifts a threshold corrupts every downstream verdict.
+   Look for a section named "Auditing of Standard", "Audit protocol", "Grading",
+   "Non-conformance" or similar.
+2. A short, factual summary of what the standard covers.
+
+Rules:
+- Quote thresholds and definitions verbatim. Do not round, merge or reorder them.
+- Do not invent a rating row that is not printed. If a level has no definition in
+  the text, omit it rather than guessing.
+- Never summarise a section you were not given text for; write "not covered in the
+  supplied text" instead.",
+  "user": "Summarise Tesco Ornamental Plant Standard v5.0 using the text above.
+
+<sections>
+<section no="10">Pest management</section>
+<section no="14">Environment, water and waste</section>
+</sections>
+
+Produce one sectionSummaries entry for each section above, in the same order.
+
+Extract the grading rules into gradingRules, including the verbatim text of the grading section.",
+}
+`;
