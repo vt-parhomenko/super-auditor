@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import type { AuditRunDto, RunConfig } from '@shared/domain';
+import type { AppSettings, ProviderStatus } from '@shared/ipc';
 import { RunStatusBadge } from '@renderer/components/Badges';
 import { DataTable, type Column } from '@renderer/components/DataTable';
 import {
@@ -11,14 +12,23 @@ import {
 } from '@renderer/components/DeleteRunDialog';
 import { CostMeter, ProgressBar } from '@renderer/components/Meters';
 import { Modal } from '@renderer/components/Modal';
+import { ModelHint, ModelPicker, type ModelChoice } from '@renderer/components/ModelPicker';
 import { EmptyState, QueryState } from '@renderer/components/States';
 import { useDocuments } from '@renderer/hooks/useDocuments';
 import { useAnyRunProgress, useEstimateRun, useRunControls, useRuns, useStartRun } from '@renderer/hooks/useRuns';
+import { useProviders, useSettings } from '@renderer/hooks/useSettings';
 import { useSites } from '@renderer/hooks/useSites';
 import { useSpecs } from '@renderer/hooks/useSpecs';
-import { useT } from '@renderer/i18n';
+import { useT, type Messages } from '@renderer/i18n';
 import { formatCost, formatDateTime, formatDuration, formatNumber, formatTokens } from '@renderer/lib/format';
 import { useLabels } from '@renderer/lib/labels';
+import {
+  STAGE_DEFAULT_PROVIDER,
+  choiceWithModel,
+  choiceWithProvider,
+  findModel,
+  toModelRef,
+} from '@renderer/lib/models';
 import { usePageContext } from '@renderer/store/topbar';
 import { toast } from '@renderer/store/ui';
 
@@ -90,7 +100,7 @@ export function RunsPage() {
       width: '92px',
       align: 'right',
       render: (r) => <span className="tabnum">{formatCost(r.usage.costUsd)}</span>,
-      title: (r) => `${formatTokens(r.usage.inputTokens)} in / ${formatTokens(r.usage.outputTokens)} out`,
+      title: (r) => t.runs.costTitle(formatTokens(r.usage.inputTokens), formatTokens(r.usage.outputTokens)),
     },
   ];
 
@@ -187,6 +197,31 @@ export function RunsPage() {
 
 // ─── Діалог створення ────────────────────────────────────────────────────────
 
+/** Людська назва моделі з каталогу будь-якого провайдера; невідома — сирий id. */
+function modelName(modelId: string, providers: readonly ProviderStatus[]): string {
+  for (const provider of providers) {
+    const info = findModel(provider, modelId);
+    if (info?.label && info.label !== modelId) return `${info.label} (${modelId})`;
+  }
+  return modelId;
+}
+
+/** «Claude Opus 5.5 (OpenRouter)» для підказки «як у налаштуваннях». */
+function describeChoice(
+  t: Messages,
+  entry: AppSettings['routing'][keyof AppSettings['routing']],
+  providers: readonly ProviderStatus[],
+): string {
+  const provider = providers.find((p) => p.id === entry?.provider);
+  if (!entry?.model) {
+    return entry?.provider && entry.provider !== STAGE_DEFAULT_PROVIDER
+      ? t.runs.modelOverrideProviderDefault(provider?.label ?? entry.provider)
+      : t.runs.modelOverrideDefault;
+  }
+  const name = findModel(provider, entry.model)?.label || entry.model;
+  return provider ? `${name} (${provider.label})` : name;
+}
+
 function CreateRunModal({ onClose }: { onClose: () => void }) {
   const t = useT();
   const navigate = useNavigate();
@@ -196,11 +231,32 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
   const estimate = useEstimateRun();
   const start = useStartRun();
 
+  const settings = useSettings();
+  const providers = useProviders();
+  const providerList = providers.data ?? [];
+
   const [label, setLabel] = useState('');
   const [specVersionId, setSpecVersionId] = useState<number | null>(null);
   const [siteProfileId, setSiteProfileId] = useState<number | null>(null);
   const [selectedDocs, setSelectedDocs] = useState<Set<number>>(new Set());
   const [skipCritic, setSkipCritic] = useState(false);
+  /** null — «як у налаштуваннях»: маршрутизацію прогону не перевизначаємо. */
+  const [override, setOverride] = useState<ModelChoice | null>(null);
+  /** Для якої конфігурації пораховано оцінку: стара оцінка після зміни моделі бреше. */
+  const [estimatedKey, setEstimatedKey] = useState<string | null>(null);
+
+  /** Перемикання на власну модель стартує з тієї, що вже стоїть для судження. */
+  const startOverride = () => {
+    const judge = settings.data?.routing.judge;
+    const judgeProvider = providerList.find((p) => p.id === judge?.provider);
+    if (judge?.model && judgeProvider) {
+      // Через choiceWithModel: збережений effort, якого модель не приймає, відкидається.
+      setOverride(choiceWithModel(judge, judgeProvider, judge.model));
+      return;
+    }
+    const preferred = providerList.find((p) => p.configured) ?? providerList[0];
+    if (preferred) setOverride(choiceWithProvider(null, providerList, preferred.id));
+  };
 
   const specVersions = useMemo(
     () =>
@@ -227,8 +283,13 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
     d.versions.map((v) => ({ id: v.id, title: d.title, docNumber: d.docNumber, versionLabel: v.versionLabel })),
   );
 
+  // Одна модель на судження й критика: людина обирає «чим аналізувати», а не
+  // маршрутизацію по етапах — для неї є налаштування.
+  const overrideRef = override?.model ? toModelRef(override) : null;
+  const overrideIncomplete = override != null && overrideRef == null;
+
   const config: RunConfig | null =
-    specVersionId == null || selectedDocs.size === 0
+    specVersionId == null || selectedDocs.size === 0 || overrideIncomplete
       ? null
       : {
           ...(label.trim() ? { label: label.trim() } : {}),
@@ -236,9 +297,15 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
           siteProfileId,
           documentVersionIds: [...selectedDocs],
           skipCritic,
+          ...(overrideRef ? { routing: { judge: overrideRef, critic: overrideRef } } : {}),
         };
+  // Назва прогону на оцінку не впливає — не ховаємо оцінку, поки людина її дописує.
+  const configKey = config ? JSON.stringify({ ...config, label: undefined }) : null;
+  const estimateData = estimate.data && estimatedKey === configKey ? estimate.data : null;
+  const estimateModel = estimateData?.model ?? null;
 
   const blocked = chosenSpec != null && !chosenSpec.ready;
+  const routing = settings.data?.routing;
 
   return (
     <Modal
@@ -255,7 +322,10 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
             disabled={!config || estimate.isPending}
             onClick={() =>
               config &&
-              estimate.mutate(config, { onError: (error) => toast('error', error.message) })
+              estimate.mutate(config, {
+                onSuccess: () => setEstimatedKey(configKey),
+                onError: (error) => toast('error', error.message),
+              })
             }
           >
             {estimate.isPending ? t.runs.estimating : t.runs.estimate}
@@ -376,27 +446,79 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
           </span>
         </label>
 
-        {estimate.data && (
+        <div className="field">
+          <span className="label">{t.runs.modelOverrideTitle}</span>
+          <div className="seg" role="group" aria-label={t.runs.modelOverrideGroup} style={{ alignSelf: 'flex-start' }}>
+            <button
+              type="button"
+              aria-pressed={override == null}
+              className={override == null ? 'active' : ''}
+              onClick={() => setOverride(null)}
+            >
+              {t.runs.modelOverrideSettings}
+            </button>
+            <button
+              type="button"
+              aria-pressed={override != null}
+              className={override != null ? 'active' : ''}
+              disabled={providerList.length === 0}
+              onClick={() => override == null && startOverride()}
+            >
+              {t.runs.modelOverrideCustom}
+            </button>
+          </div>
+          {override == null ? (
+            <span className="field-hint">
+              {t.runs.modelOverrideCurrent(
+                describeChoice(t, routing?.judge, providerList),
+                describeChoice(t, routing?.critic, providerList),
+              )}
+            </span>
+          ) : (
+            <div className="model-override">
+              <div className="model-override-grid">
+                <ModelPicker
+                  value={override}
+                  providers={providerList}
+                  onChange={setOverride}
+                  label={t.runs.modelOverrideTitle}
+                  allowDefault={false}
+                />
+              </div>
+              <ModelHint value={override} providers={providerList} />
+              <span className="field-hint">{t.runs.modelOverrideHint}</span>
+            </div>
+          )}
+        </div>
+
+        {estimateData && (
           <div className="estimate-box">
             <div className="col">
               <span className="stat-label">{t.runs.estimateTasks}</span>
               <span className="stat-value" style={{ fontSize: 'var(--fs-xl)' }}>
-                {formatNumber(estimate.data.tasks)}
+                {formatNumber(estimateData.tasks)}
               </span>
             </div>
             <div className="col">
               <span className="stat-label">{t.runs.estimateInput}</span>
               <span className="stat-value" style={{ fontSize: 'var(--fs-xl)' }}>
-                {formatTokens(estimate.data.inputTokens)}
+                {formatTokens(estimateData.inputTokens)}
               </span>
             </div>
             <div className="col">
               <span className="stat-label">{t.runs.estimateCost}</span>
               <span className="stat-value" style={{ fontSize: 'var(--fs-xl)' }}>
-                {formatCost(estimate.data.costUsd)}
+                {estimateData.costUsd == null ? t.runs.estimatePriceUnknown : formatCost(estimateData.costUsd)}
               </span>
-              <span className="stat-sub">{t.runs.estimateCostSub}</span>
+              <span className="stat-sub">
+                {estimateData.costUsd == null ? t.runs.estimatePriceUnknownSub : t.runs.estimateCostSub}
+              </span>
             </div>
+            {estimateModel && (
+              <div className="estimate-model" title={estimateModel}>
+                {t.runs.estimateModel(modelName(estimateModel, providerList))}
+              </div>
+            )}
           </div>
         )}
       </div>

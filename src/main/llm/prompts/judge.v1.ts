@@ -12,9 +12,9 @@
 
 import { z } from 'zod';
 import { MODEL_VERDICTS } from '@shared/domain';
-import type { Obligation, Severity } from '@shared/domain';
+import type { Obligation, ResultsLanguage, Severity } from '@shared/domain';
 import type { PromptDef, ToolSpec } from '../types';
-import { clip, joinBlocks, languageInstruction, tag } from './util';
+import { clip, joinBlocks, languageInstruction, languageKey, tag } from './util';
 
 export interface JudgeClause {
   clauseNo: string;
@@ -29,8 +29,8 @@ export interface JudgeInput {
   section: { sectionNo: string; sectionTitle: string | null };
   clauses: JudgeClause[];
   maxTextChars?: number;
-  /** Мова висновків (BCP-47). Цитати завжди лишаються мовою оригіналу. */
-  language?: string;
+  /** Мова висновків; `''` або відсутня — мовою стандарту. Цитати — завжди оригінал. */
+  language?: ResultsLanguage;
 }
 
 /** `none` існує тільки в схемі інструмента; у БД severity — nullable. */
@@ -199,6 +199,10 @@ export const judgeV1: PromptDef<JudgeInput, JudgeOutput> = {
       section: { sectionNo: input.section.sectionNo, sectionTitle: input.section.sectionTitle },
       clauses: input.clauses,
       maxTextChars: input.maxTextChars ?? null,
+      // Мова змінює відповідь, тож входить у ключ: інакше висновок, закешований
+      // українською, віддавався б і на запит нідерландською. Порожня мова в ключ
+      // не потрапляє — ключі вже закешованих викликів лишаються дійсними.
+      ...languageKey(input.language),
     };
   },
 };

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
 import { createDb, type Db } from './db';
+import { DEFAULT_LANGUAGE, mainMessages, uiLanguageOf } from './i18n';
 import { installIpc, type InstalledIpc } from './ipc';
 import { setOrchestrator } from './ipc/orchestratorPort';
 import { dbPath, ensureStorageDirs, storageRoot } from './paths';
@@ -102,10 +103,16 @@ app.on('will-quit', () => {
 process.on('unhandledRejection', (reason) => {
   console.error('[super-auditor] необроблена відмова:', reason);
   const message = reason instanceof Error ? reason.message : String(reason);
-  ipc?.events.toast('error', `Внутрішня помилка: ${message}`);
+  ipc?.events.toast('error', internalErrorText(message));
 });
 
 process.on('uncaughtException', (error) => {
   console.error('[super-auditor] неперехоплена помилка:', error);
-  ipc?.events.toast('error', `Внутрішня помилка: ${error.message}`);
+  ipc?.events.toast('error', internalErrorText(error.message));
 });
+
+/** Тост мовою інтерфейсу; база вже може бути закрита (вихід) — тоді англійською. */
+function internalErrorText(message: string): string {
+  const language = db ? uiLanguageOf(db) : DEFAULT_LANGUAGE;
+  return mainMessages(language).app.internalError(message);
+}

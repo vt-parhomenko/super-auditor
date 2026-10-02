@@ -1,4 +1,5 @@
 import type { Db } from '@main/db';
+import { uiMessages } from '@main/i18n';
 import { buildRequest, docProfileV1, type DocProfileOutput, type LlmProvider } from '@main/llm';
 
 /**
@@ -17,7 +18,8 @@ import { buildRequest, docProfileV1, type DocProfileOutput, type LlmProvider } f
  *
  * Тому секції, яких документ не стосується, отримують `not_addressed` без
  * звернення до моделі — і це чесно: рішення ухвалене на етапі профілювання,
- * що прямо написано в rationale кожного такого finding.
+ * що прямо написано в rationale кожного такого finding (`results.outOfScope`
+ * у каталозі `@main/i18n`, мовою результатів).
  */
 
 export interface DocumentScope {
@@ -43,7 +45,8 @@ export interface ScopeOptions {
  */
 export async function scopeDocuments(
   db: Db,
-  provider: LlmProvider,
+  /** null — лише для `mode: 'all'`, де модель не викликається. */
+  provider: LlmProvider | null,
   specVersionId: number,
   documentVersionIds: readonly number[],
   options: ScopeOptions = {},
@@ -63,6 +66,8 @@ export async function scopeDocuments(
     }
     return result;
   }
+
+  if (!provider) throw new Error('scopeDocuments: provider is required unless mode is "all"');
 
   const sectionOf = new Map(clauses.map((c) => [c.clauseNo, c.sectionNo ?? 'inne']));
 
@@ -135,7 +140,7 @@ async function candidateClausesFor(
 
   const version = db.documents.getVersion(documentVersionId);
   if (!version?.extractionId) {
-    throw new Error(`Для версії документа ${documentVersionId} немає екстракції тексту`);
+    throw new Error(uiMessages(db).run.noExtraction(documentVersionId));
   }
   const document = db.documents.get(version.documentId);
   const text = db.extractions.getText(version.extractionId) ?? '';
@@ -173,8 +178,3 @@ async function candidateClausesFor(
 
   return result.data.candidateClauses ?? [];
 }
-
-/** Пояснення, яке потрапляє в finding для секції поза scope. */
-export const OUT_OF_SCOPE_RATIONALE =
-  'Документ не стосується цієї секції стандарту — визначено на етапі профілювання документа, ' +
-  'без звернення до моделі з текстом вимоги.';

@@ -2,17 +2,23 @@
 
 import type { IsoDate } from '@shared/domain';
 import { getLocale, getMessages, type Locale } from '@renderer/i18n';
+import { relativeParts } from '@renderer/lib/relativeTime';
 
 interface Formatters {
   locale: Locale;
   dateTime: Intl.DateTimeFormat;
   date: Intl.DateTimeFormat;
   number: Intl.NumberFormat;
+  relative: Intl.RelativeTimeFormat;
 }
 
 let cached: Formatters | null = null;
 
-/** Intl-обʼєкти дорогі — перебудовуємо лише коли справді змінилась локаль. */
+/**
+ * Intl-обʼєкти дорогі — перебудовуємо лише коли справді змінилась локаль.
+ * Регіональний тег береться з каталогу (`nl-NL`, `uk-UA`, `en-GB`): саме він
+ * дає правильні роздільники й порядок дати — `02-10-2026` для нідерландської.
+ */
 function intl(): Formatters {
   const locale = getLocale();
   if (cached && cached.locale === locale) return cached;
@@ -28,6 +34,7 @@ function intl(): Formatters {
     }),
     date: new Intl.DateTimeFormat(tag, { year: 'numeric', month: '2-digit', day: '2-digit' }),
     number: new Intl.NumberFormat(tag),
+    relative: new Intl.RelativeTimeFormat(tag, { numeric: 'auto', style: 'long' }),
   };
   return cached;
 }
@@ -42,6 +49,18 @@ export function formatDate(iso: IsoDate | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? '—' : intl().date.format(d);
+}
+
+/**
+ * «5 хвилин тому» / «5 minuten geleden». Для подій, де важливіша свіжість, ніж
+ * точний час (оновлення каталогу, баланс); точний час — у `title` через `formatDateTime`.
+ */
+export function formatRelative(iso: IsoDate | null | undefined, now: number = Date.now()): string {
+  if (!iso) return '—';
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return '—';
+  const { value, unit } = relativeParts((time - now) / 1000);
+  return intl().relative.format(value, unit);
 }
 
 /** Тривалість між двома мітками у вигляді «12 хв 03 с». */

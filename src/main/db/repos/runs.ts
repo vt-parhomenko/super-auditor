@@ -11,6 +11,8 @@
 import {
   STAGES,
   emptyUsage,
+  isEffort,
+  isLanguage,
   emptyVerdictCounts,
   worstVerdict,
   type AuditRunDto,
@@ -18,7 +20,9 @@ import {
   type CoverageMatrix,
   type DocumentRunStats,
   type GapItem,
+  type ModelRef,
   type Obligation,
+  type ResultsLanguage,
   type RunProgress,
   type RunStatus,
   type RunSummary,
@@ -47,6 +51,25 @@ export interface RunInput {
   modelCritic?: string | null;
   promptVersion: string;
   status?: RunStatus;
+  /** Маршрутизація, з якою прогін стартував, — resume продовжує на ній же. */
+  routing?: RunRouting | null;
+  /** Мова висновків прогону; `''` — мовою стандарту. */
+  resultsLanguage?: ResultsLanguage | null;
+}
+
+/** Моделі, на яких іде прогін. `critic: null` — прохід критика вимкнено. */
+export interface RunRouting {
+  judge: ModelRef;
+  critic: ModelRef | null;
+}
+
+/**
+ * Налаштування, зафіксовані на старті прогону. `null` у полі — прогін зі старої
+ * версії, де їх не записували: тоді діють поточні налаштування.
+ */
+export interface RunLaunchSettings {
+  routing: RunRouting | null;
+  resultsLanguage: ResultsLanguage | null;
 }
 
 export interface RunTaskInput {
@@ -85,8 +108,9 @@ export class RunsRepo extends BaseRepo {
     const write = this.db.transaction((): number => {
       const res = this.stmt(
         `INSERT INTO audit_run
-           (label, spec_version_id, site_profile_id, status, model_judge, model_critic, prompt_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (label, spec_version_id, site_profile_id, status, model_judge, model_critic, prompt_version,
+            routing, results_language)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         input.label ?? null,
         input.specVersionId,
@@ -95,6 +119,8 @@ export class RunsRepo extends BaseRepo {
         input.modelJudge,
         input.modelCritic ?? null,
         input.promptVersion,
+        input.routing ? JSON.stringify(input.routing) : null,
+        input.resultsLanguage ?? null,
       );
       const runId = toId(res);
       const link = this.stmt(
@@ -134,6 +160,19 @@ export class RunsRepo extends BaseRepo {
     }
 
     return rows.map((row) => toAuditRunDto(row, byRun.get(row.id) ?? []));
+  }
+
+  /** Маршрутизація й мова, з якими прогін стартував. `null` — прогону немає. */
+  launchSettings(runId: number): RunLaunchSettings | null {
+    const row = this.stmt<Pick<AuditRunRow, 'routing' | 'results_language'>>(
+      'SELECT routing, results_language FROM audit_run WHERE id = ?',
+    ).get(runId);
+    if (!row) return null;
+    const language = row.results_language;
+    return {
+      routing: parseRunRouting(row.routing),
+      resultsLanguage: language === '' || isLanguage(language) ? language : null,
+    };
   }
 
   documentVersionIds(runId: number): number[] {
@@ -733,4 +772,37 @@ function worstSeverity(concatenated: string | null): Severity | null {
     if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best]) best = severity;
   }
   return best;
+}
+
+// ─── Зафіксована маршрутизація ──────────────────────────────────────────────
+
+/**
+ * Розбір `audit_run.routing`. Битий або неповний JSON → `null`: краще
+ * продовжити на поточних налаштуваннях, ніж упасти на resume.
+ */
+export function parseRunRouting(raw: string | null | undefined): RunRouting | null {
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const { judge, critic } = parsed as { judge?: unknown; critic?: unknown };
+
+  const judgeRef = toModelRef(judge);
+  if (!judgeRef) return null;
+  if (critic === null || critic === undefined) return { judge: judgeRef, critic: null };
+
+  const criticRef = toModelRef(critic);
+  return criticRef ? { judge: judgeRef, critic: criticRef } : null;
+}
+
+function toModelRef(value: unknown): ModelRef | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const { provider, model, effort } = value as Record<string, unknown>;
+  if (typeof provider !== 'string' || provider === '') return null;
+  if (typeof model !== 'string' || model === '') return null;
+  return isEffort(effort) ? { provider, model, effort } : { provider, model };
 }

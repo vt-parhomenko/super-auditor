@@ -58,8 +58,8 @@ export function CostMeter({ usage, compact = false }: { usage: UsageTotals; comp
       <span className="cost-value">{formatCost(usage.costUsd)}</span>
       {!compact && (
         <span className="cost-tokens">
-          {formatTokens(usage.inputTokens)} in · {t.meters.cacheShare(cacheShare)} ·{' '}
-          {formatTokens(usage.outputTokens)} out
+          {formatTokens(usage.inputTokens)} {t.meters.inShort} · {t.meters.cacheShare(cacheShare)} ·{' '}
+          {formatTokens(usage.outputTokens)} {t.meters.outShort}
         </span>
       )}
     </span>

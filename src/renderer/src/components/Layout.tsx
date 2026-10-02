@@ -1,9 +1,11 @@
 import { Fragment } from 'react';
 import { NavLink, Outlet, Link } from 'react-router-dom';
 
+import { BalanceIndicator } from '@renderer/components/Balance';
 import { Toasts } from '@renderer/components/Toasts';
 import { CostMeter } from '@renderer/components/Meters';
 import { useAnyRunProgress } from '@renderer/hooks/useRuns';
+import { useUiLanguageSync } from '@renderer/hooks/useUiLanguageSync';
 import { useT } from '@renderer/i18n';
 import { IS_MOCK } from '@renderer/lib/api';
 import { useTopbarStore } from '@renderer/store/topbar';
@@ -15,6 +17,8 @@ export function Layout() {
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
   const progress = useAnyRunProgress();
+  // Layout змонтований завжди — звідси синхронізуємо мову інтерфейсу з main.
+  useUiLanguageSync();
 
   const nav = [
     { to: '/library', icon: '▤', label: t.nav.library },
@@ -102,6 +106,7 @@ export function Layout() {
             )}
           </div>
           <div className="topbar-actions">
+            <BalanceIndicator />
             {progress && progress.status === 'running' && <CostMeter usage={progress.usage} compact />}
             {IS_MOCK && <span className="mock-flag" title={t.nav.mockTitle}>MOCK</span>}
           </div>

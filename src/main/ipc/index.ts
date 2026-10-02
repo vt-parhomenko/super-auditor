@@ -37,6 +37,11 @@ export interface InstalledIpc {
   dispose(): void;
 }
 
+/** Ключ `app_setting`, під яким лежить живий каталог моделей провайдера. */
+export function catalogueKey(providerId: string): string {
+  return `llm.catalogue.${providerId}`;
+}
+
 /** Офлайн-режим для CI та тестів: `SUPER_AUDITOR_OFFLINE=1`. */
 export function networkAllowedByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   const flag = env['SUPER_AUDITOR_OFFLINE'];
@@ -46,17 +51,27 @@ export function networkAllowedByEnv(env: NodeJS.ProcessEnv = process.env): boole
 export function installIpc(options: InstallIpcOptions): InstalledIpc {
   const store = options.secrets ?? sharedSecrets();
   const events = createEmitter(options.getWindow);
+  const allowNetwork = options.allowNetwork ?? networkAllowedByEnv();
+  const db = options.db;
 
   const providers =
     options.providers ??
-    createDefaultRegistry({ getApiKey: (providerId) => store.getApiKey(providerId) });
+    createDefaultRegistry({
+      getApiKey: (providerId) => store.getApiKey(providerId),
+      // Той самий прапорець, що й для `providers:test`: офлайн-режим вимикає
+      // і фонове оновлення каталогів моделей.
+      allowNetwork,
+      // Живі каталоги моделей переживають перезапуск (`llm.catalogue.<id>`).
+      loadCatalogue: (providerId) => db.settings.getRaw(catalogueKey(providerId)),
+      saveCatalogue: (providerId, value) => db.settings.setRaw(catalogueKey(providerId), value),
+    });
 
   const context: IpcContext = {
-    db: options.db,
+    db,
     events,
     secrets: store,
     providers,
-    allowNetwork: options.allowNetwork ?? networkAllowedByEnv(),
+    allowNetwork,
     getWindow: options.getWindow,
   };
 

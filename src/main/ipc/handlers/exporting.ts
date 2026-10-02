@@ -17,7 +17,7 @@ export function exportHandlers(ctx: IpcContext): ExportHandlers {
     'export:run': async (runId, format) => {
       requireRun(db, runId);
       if (!FORMATS.includes(format)) {
-        throw validation(`Невідомий формат експорту: ${JSON.stringify(format)}`);
+        throw validation((m) => m.exporting.unknownFormat(String(JSON.stringify(format))));
       }
       return requireOrchestrator().exportRun(runId, format);
     },

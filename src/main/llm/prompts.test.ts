@@ -19,7 +19,7 @@ import {
   severityFromTool,
   specSummaryV1,
 } from './prompts';
-import { buildRequest } from './request';
+import { buildRequest, cacheKeyForRequest } from './request';
 
 describe('реєстр промптів', () => {
   it('версія кожного промпта — рядок виду "<stage>.v<N>" і збігається з етапом', () => {
@@ -165,6 +165,78 @@ describe('doc_profile.v1', () => {
 
   it('snapshot', () => {
     expect({ system: docProfileV1.system, user: req.messages[0]?.content }).toMatchSnapshot();
+  });
+});
+
+// ─── Мова результатів ────────────────────────────────────────────────────────
+
+describe('мова результатів у промптах', () => {
+  const MODEL = 'claude-opus-5';
+  const userOf = (req: { messages: Array<{ content: string }> }): string => req.messages[0]?.content ?? '';
+
+  /** Промпти, де модель пише текст для людини, і як їх зібрати з мовою. */
+  const withLanguage = {
+    judge: (language: '' | 'en' | 'nl' | 'uk') => buildRequest(judgeV1, { ...judgeInput, language }),
+    critic: (language: '' | 'en' | 'nl' | 'uk') => buildRequest(criticV1, { ...criticInput, language }),
+    spec_summary: (language: '' | 'en' | 'nl' | 'uk') =>
+      buildRequest(specSummaryV1, { ...specSummaryInput, language }),
+  };
+  const withoutLanguage = {
+    judge: () => buildRequest(judgeV1, judgeInput),
+    critic: () => buildRequest(criticV1, criticInput),
+    spec_summary: () => buildRequest(specSummaryV1, specSummaryInput),
+  };
+  const stages = ['judge', 'critic', 'spec_summary'] as const;
+
+  it.each(stages)('%s: мовою стандарту промпт і ключ кешу байт-у-байт ті самі', (stage) => {
+    // На цьому тримаються знімки промптів і вже накопичений кеш.
+    const plain = withoutLanguage[stage]();
+    const empty = withLanguage[stage]('');
+    expect(userOf(empty)).toBe(userOf(plain));
+    expect(empty.cacheInput).toEqual(plain.cacheInput);
+    expect(cacheKeyForRequest(empty, MODEL)).toBe(cacheKeyForRequest(plain, MODEL));
+  });
+
+  it.each(stages)('%s: інша мова — інший ключ кешу', (stage) => {
+    // Інакше висновок, закешований українською, віддавався б і на запит нідерландською.
+    const keys = (['', 'en', 'nl', 'uk'] as const).map((language) =>
+      cacheKeyForRequest(withLanguage[stage](language), MODEL),
+    );
+    expect(new Set(keys).size).toBe(4);
+  });
+
+  it.each(stages)('%s: інструкція є лише з мовою і завжди забороняє перекладати цитати', (stage) => {
+    expect(userOf(withLanguage[stage](''))).not.toContain('never translate');
+
+    const dutch = userOf(withLanguage[stage]('nl'));
+    expect(dutch).toContain('in Dutch');
+    expect(dutch).toContain('Keep every `quote` EXACTLY as it appears in the source document');
+    expect(dutch).toContain('never translate');
+  });
+
+  it('judge: перекладає висновки, але не вердикти й severity', () => {
+    const user = userOf(withLanguage.judge('uk'));
+    expect(user).toContain('Write `rationale`, `gap` and `recommendation` in Ukrainian.');
+    expect(user).toContain('Keep clause numbers, verdict and severity values unchanged');
+  });
+
+  it('critic: пояснення критика — мовою результатів, вердикт — кодом схеми', () => {
+    // `reason` дописується в rationale finding'а — користувач читає його поруч із висновком.
+    const user = userOf(withLanguage.critic('uk'));
+    expect(user).toContain('Write `reason` and `missingElements` in Ukrainian.');
+    expect(user).toContain('`suggestedVerdict` value unchanged');
+  });
+
+  it('spec_summary: самарі мовою результатів, правила градації — дослівно', () => {
+    const user = userOf(withLanguage.spec_summary('nl'));
+    expect(user).toContain('Write `summary`, `scope` and `sectionSummaries[].summary` in Dutch.');
+    expect(user).toContain('Never translate `gradingRules`');
+    expect(user).toContain('original language of the standard');
+  });
+
+  it('clause_extract і doc_profile мови не мають: реєстр дослівний, профіль — службовий', () => {
+    expect(userOf(buildRequest(clauseExtractV1, clauseExtractInput))).not.toContain('never translate');
+    expect(userOf(buildRequest(docProfileV1, docProfileInput))).not.toContain('never translate');
   });
 });
 

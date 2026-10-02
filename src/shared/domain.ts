@@ -75,6 +75,62 @@ export type ClausesStatus = (typeof CLAUSES_STATUSES)[number];
 export const EVIDENCE_SOURCES = ['citations_api', 'model_quote'] as const;
 export type EvidenceSource = (typeof EVIDENCE_SOURCES)[number];
 
+/** Глибина роздумів моделі, від найдешевшої до найретельнішої. */
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type Effort = (typeof EFFORTS)[number];
+
+export function isEffort(value: unknown): value is Effort {
+  return typeof value === 'string' && (EFFORTS as readonly string[]).includes(value);
+}
+
+/**
+ * Мови застосунку. Один список на дві речі: мову інтерфейсу і мову, якою
+ * модель пише висновки. Коди — ISO 639-1.
+ */
+export const LANGUAGES = ['en', 'nl', 'uk'] as const;
+export type Language = (typeof LANGUAGES)[number];
+
+export function isLanguage(value: unknown): value is Language {
+  return typeof value === 'string' && (LANGUAGES as readonly string[]).includes(value);
+}
+
+/**
+ * Мова висновків: одна з `LANGUAGES` або `''` — модель пише мовою стандарту
+ * (без інструкції про мову). Цитати-докази лишаються мовою оригіналу завжди.
+ */
+export type ResultsLanguage = '' | Language;
+
+/** Ціновий клас моделі — для підказки в списку вибору. */
+export const MODEL_TIERS = ['top', 'balanced', 'budget'] as const;
+export type ModelTier = (typeof MODEL_TIERS)[number];
+
+/**
+ * Опис моделі для вибору в маршрутизації етапів. Будується в main із вбудованого
+ * знімка або з живого каталогу провайдера; в renderer лише відображається.
+ */
+export interface ModelInfo {
+  /** Ідентифікатор, що йде в API провайдера: 'claude-opus-5-5', 'openai/gpt-6-luna'. */
+  id: string;
+  /** Людська назва: 'Claude Opus 5.5', 'GPT-6 Luna'. */
+  label: string;
+  /** Розробник моделі для групування списку: 'Anthropic', 'OpenAI', 'DeepSeek'… */
+  vendor: string | null;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+  /** USD за 1M токенів. null — ціна невідома (не вигадуємо). */
+  inputPerMTok: number | null;
+  outputPerMTok: number | null;
+  cacheReadPerMTok: number | null;
+  /**
+   * Рівні effort, які модель приймає. null — невідомо (UI показує всі);
+   * [] — модель не керується effort (поле в UI вимикається).
+   */
+  efforts: Effort[] | null;
+  /** Входить у курований список для аудиту — показується першим. */
+  recommended: boolean;
+  tier: ModelTier | null;
+}
+
 /** ISO-8601 UTC, напр. '2026-08-30T12:00:00.000Z'. Усі дати в системі — такі. */
 export type IsoDate = string;
 
@@ -291,9 +347,9 @@ export interface RunConfig {
 }
 
 export interface ModelRef {
-  provider: string; // 'anthropic' | 'openai' | 'openai-compatible'
-  model: string; // 'claude-opus-5'
-  effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  provider: string; // 'anthropic' | 'openrouter' | 'openai-compatible'
+  model: string; // 'claude-opus-5', 'openai/gpt-6-luna'
+  effort?: Effort;
 }
 
 export interface AuditRunDto {

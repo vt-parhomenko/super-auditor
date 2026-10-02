@@ -10,6 +10,7 @@
  * Щоб під'єднати рушій — зареєструйте свою реалізацію через `setOcrEngine`.
  */
 
+import { LocalizedError } from '@main/i18n';
 import type { PageRange } from '@shared/domain';
 
 export interface OcrPageResult {
@@ -43,13 +44,13 @@ export interface OcrEngine {
   recognize(absPath: string, options?: OcrOptions): Promise<OcrResult>;
 }
 
-export class OcrNotConfiguredError extends Error {
+/**
+ * Документ схожий на скан (щільність тексту нижча за поріг), але жодного
+ * OCR-рушія не зареєстровано — під'єднати його можна через `setOcrEngine()`.
+ */
+export class OcrNotConfiguredError extends LocalizedError {
   constructor() {
-    super(
-      'OCR не налаштовано: документ схожий на скан (щільність тексту нижча за поріг), ' +
-        'але жодного OCR-рушія не зареєстровано. Під`єднайте рушій через setOcrEngine() ' +
-        'або імпортуйте документ із текстовим шаром.',
-    );
+    super((m) => m.importing.ocrNotConfigured);
     this.name = 'OcrNotConfiguredError';
   }
 }

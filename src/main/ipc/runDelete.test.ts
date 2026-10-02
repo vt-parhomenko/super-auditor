@@ -5,6 +5,7 @@ import { setOrchestrator } from './orchestratorPort';
 import { createHandlers } from './handlers';
 import { createEmitter } from './events';
 import type { IpcContext } from './context';
+import type { IpcError } from './errors';
 
 /**
  * Ручне видалення прогону.
@@ -39,7 +40,7 @@ beforeEach(() => {
   setOrchestrator({
     extractClauses: async () => 0,
     buildDocProfile: async () => ({}) as never,
-    estimateRun: async () => ({ tasks: 0, inputTokens: 0, costUsd: 0 }),
+    estimateRun: async () => ({ tasks: 0, inputTokens: 0, costUsd: 0, model: null }),
     startRun: async () => 0,
     pauseRun: async () => {},
     resumeRun: async () => {},
@@ -113,10 +114,18 @@ describe('runs:delete', () => {
   it('неіснуючий прогін дає зрозумілу помилку', async () => {
     // Код помилки живе в полі `code`; префікс `[NOT_FOUND]` у текст додає вже
     // шар реєстрації каналів, коли серіалізує помилку для renderer.
+    // `message` — англійською, для логів; мовою інтерфейсу текст рендерить межа IPC.
     await expect(handlers['runs:delete'](99_999)).rejects.toMatchObject({
       code: 'NOT_FOUND',
-      message: expect.stringContaining('не знайдено'),
+      message: 'Run 99999 not found',
     });
+    const error = await Promise.resolve()
+      .then(() => handlers['runs:delete'](99_999))
+      .then(
+        () => null,
+        (err: unknown) => err as IpcError,
+      );
+    expect(error?.localize('uk')).toBe('Прогін 99999 не знайдено');
   });
 
   it('картки документів оновлюються після видалення', async () => {

@@ -30,6 +30,9 @@ export function withSpendLedger(
     caps: provider.caps,
     models: provider.models,
     isConfigured: () => provider.isConfigured(),
+    // Ціни знає лише сам провайдер (каталог OpenRouter тощо). Обгортка, що
+    // загубила б метод, тихо перетворила б оцінку вартості на «ціна невідома».
+    ...(provider.pricingFor ? { pricingFor: provider.pricingFor.bind(provider) } : {}),
     async complete<T>(req: CompleteRequest<T>, signal: AbortSignal): Promise<CompleteResult<T>> {
       const result = await provider.complete(req, signal);
 

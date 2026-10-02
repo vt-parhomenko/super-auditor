@@ -11,6 +11,7 @@
  */
 
 import { z } from 'zod';
+import type { ModelInfo } from '@shared/domain';
 import { estimateCost, FREE_PRICING, type ModelPricing } from '../cost';
 import { LlmError, LlmNotConfiguredError, LlmSchemaError } from '../errors';
 import type {
@@ -79,6 +80,32 @@ export class OpenAiCompatibleProvider implements LlmProvider {
 
   get defaultModel(): string {
     return this.opts.model;
+  }
+
+  /** Локальний сервер знає моделі, яких ми не перелічили, — тож і свій id можна. */
+  readonly allowCustomModel = true;
+  readonly supportsBalance = false;
+
+  pricingFor(_model: string): ModelPricing | null {
+    return this.opts.pricing ?? FREE_PRICING;
+  }
+
+  /** Одна позиція на налаштовану модель. Effort адаптер не передає — звідси `efforts: []`. */
+  listModelInfo(): ModelInfo[] {
+    const price = this.opts.pricing ?? FREE_PRICING;
+    return this.models.map((id) => ({
+      id,
+      label: id,
+      vendor: null,
+      contextWindow: this.caps.contextWindow,
+      maxOutputTokens: this.caps.maxOutputTokens,
+      inputPerMTok: price.inputPerMTok,
+      outputPerMTok: price.outputPerMTok,
+      cacheReadPerMTok: price.cacheReadPerMTok,
+      efforts: [],
+      recommended: false,
+      tier: null,
+    }));
   }
 
   isConfigured(): boolean {

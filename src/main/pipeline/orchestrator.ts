@@ -1,16 +1,37 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Db } from '@main/db';
+import type { Db, RunRouting } from '@main/db';
+import {
+  describeLlmError,
+  errorText,
+  resultsLanguageOf,
+  resultsMessages,
+  uiLanguageOf,
+  uiMessages,
+  type MainMessages,
+} from '@main/i18n';
+import { cloudBlocked } from '@main/ipc/errors';
 import type { IpcEmitter } from '@main/ipc/events';
 import type { RunEstimate, RunOrchestrator } from '@main/ipc/orchestratorPort';
 import {
+  DEFAULT_ROUTING,
   buildRequest,
   docProfileV1,
+  getPricing,
+  isLlmError,
   type DocProfileOutput,
+  type LlmProvider,
+  type ModelPricing,
   type ProviderRegistry,
 } from '@main/llm';
 import { exportsDir } from '@main/paths';
-import type { DocProfileDto, RunConfig } from '@shared/domain';
+import {
+  VERDICTS,
+  type DocProfileDto,
+  type ModelRef,
+  type RunConfig,
+  type Stage,
+} from '@shared/domain';
 import type { ExportFormat } from '@shared/ipc';
 import { extractClausesForSpec } from './clauseExtraction';
 import { executeRun, planRun } from './runEngine';
@@ -46,11 +67,38 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
 
   const settings = () => db.settings.get();
 
+  /** Повідомлення мовою інтерфейсу — читаються щоразу, бо мову можна змінити будь-коли. */
+  const ui = (): MainMessages => uiMessages(db);
+
+  /**
+   * `resolveProvider` з поясненням відмови. Заборону хмари реєстр описує
+   * загально; тут відомо, ЧОМУ саме (localOnly чи прапорець специфікації), —
+   * і саме це людині треба знати, щоб виправити. Решту помилок LLM пояснить
+   * межа IPC (`toIpcError`).
+   */
+  const resolve = (
+    stage: Stage,
+    opts: { cloudAllowed: boolean; routingOverride?: Partial<Record<Stage, ModelRef>> | null },
+  ) => {
+    try {
+      return providers.resolveProvider(stage, settings(), opts);
+    } catch (error) {
+      if (isLlmError(error) && error.kind === 'cloud_blocked') {
+        const message = describeLlmError(uiLanguageOf(db), error, {
+          localOnly: settings().localOnly,
+          cloudAllowed: opts.cloudAllowed,
+        });
+        throw cloudBlocked(message, { providerId: error.providerId, stage: error.stage });
+      }
+      throw error;
+    }
+  };
+
   return {
     // ─── Stage 1 ─────────────────────────────────────────────────────────────
 
     async extractClauses(specVersionId) {
-      const { provider, model } = providers.resolveProvider('clause_extract', settings(), {
+      const { provider, model } = resolve('clause_extract', {
         cloudAllowed: cloudAllowedFor(specVersionId),
       });
 
@@ -74,16 +122,10 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
       );
 
       if (report.failedPages.length > 0) {
-        events.toast(
-          'warn',
-          `Не вдалося обробити сторінок: ${report.failedPages.length}. Реєстр неповний.`,
-        );
+        events.toast('warn', ui().clauses.failedPages(report.failedPages.length));
       }
       if (report.flaggedCount > 0) {
-        events.toast(
-          'warn',
-          `${report.flaggedCount} вимог позначено на перевірку — вичитайте їх першими.`,
-        );
+        events.toast('warn', ui().clauses.flagged(report.flaggedCount));
       }
 
       return report.clausesStored;
@@ -94,7 +136,7 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
     async buildDocProfile(documentVersionId): Promise<DocProfileDto> {
       const version = db.documents.getVersion(documentVersionId);
       if (!version?.extractionId) {
-        throw new Error(`Для версії документа ${documentVersionId} немає екстракції тексту`);
+        throw new Error(ui().run.noExtraction(documentVersionId));
       }
       const document = db.documents.get(version.documentId);
       const text = db.extractions.getText(version.extractionId) ?? '';
@@ -103,7 +145,7 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
       // вичитану специфікацію. Якщо її ще немає, профіль будується без підказки.
       const clauseIndex = latestReviewedClauses(db);
 
-      const { provider, model } = providers.resolveProvider('doc_profile', settings(), {
+      const { provider, model } = resolve('doc_profile', {
         cloudAllowed: clauseIndex.cloudAllowed,
       });
 
@@ -137,7 +179,7 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
     // ─── Прогони ─────────────────────────────────────────────────────────────
 
     async estimateRun(config): Promise<RunEstimate> {
-      return estimate(db, config);
+      return estimate(db, config, judgeForEstimate(config));
     },
 
     async startRun(config) {
@@ -146,16 +188,10 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
 
       // Провайдерів резолвимо ДО планування: краще впасти на «немає ключа»
       // перед створенням прогону, ніж лишити в базі порожній завислий прогін.
-      const judge = providers.resolveProvider('judge', current, {
-        cloudAllowed,
-        routingOverride: config.routing ?? null,
-      });
+      const judge = resolve('judge', { cloudAllowed, routingOverride: config.routing ?? null });
       const critic = config.skipCritic
         ? null
-        : providers.resolveProvider('critic', current, {
-            cloudAllowed,
-            routingOverride: config.routing ?? null,
-          });
+        : resolve('critic', { cloudAllowed, routingOverride: config.routing ?? null });
 
       // Scope рахуємо ДО планування: один дешевий виклик на документ, який
       // знімає ~19 із 24 викликів судження і, головне, прибирає хибні `partial`
@@ -164,23 +200,30 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
       // а профілювання відбувається до нього — і теж має потрапити в облік.
       const ledger: LedgerContext = { specVersionId: config.specVersionId, runId: null };
 
-      const profiler = providers.resolveProvider('doc_profile', current, { cloudAllowed });
+      // Профіль документа: перевизначення з конфігурації прогону діє і тут (інакше
+      // користувач лише з ключем OpenRouter упирався б у «Anthropic не налаштовано»),
+      // а в режимі `all` модель профілю не потрібна зовсім — і не вимагаємо її.
+      const scopeMode = config.scope ?? 'profile';
+      const profiler =
+        scopeMode === 'all'
+          ? null
+          : resolve('doc_profile', { cloudAllowed, routingOverride: config.routing ?? null });
       const scope = await scopeDocuments(
         db,
-        withSpendLedger(profiler.provider, db, ledger),
+        profiler ? withSpendLedger(profiler.provider, db, ledger) : null,
         config.specVersionId,
         config.documentVersionIds,
-        { mode: config.scope ?? 'profile' },
+        { mode: scopeMode },
       );
 
       const fallbacks = [...scope.values()].filter((s) => s.source === 'fallback');
       if (fallbacks.length > 0) {
-        events.toast(
-          'warn',
-          `Не вдалося звузити перевірку для документів: ${fallbacks.length}. ` +
-            'Їх буде перевірено проти всього стандарту.',
-        );
+        events.toast('warn', ui().run.scopeFallback(fallbacks.length));
       }
+
+      // Маршрутизацію фіксуємо в прогоні: resume має продовжити на тих самих
+      // моделях, навіть якщо налаштування за цей час змінились.
+      const routing: RunRouting = { judge: judge.model, critic: critic?.model ?? null };
 
       const plan = planRun(
         db,
@@ -190,7 +233,7 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
           critic: critic?.model.model ?? null,
           promptVersion: 'judge.v1',
         },
-        { scope: new Map([...scope].map(([id, s]) => [id, s.sections])) },
+        { scope: new Map([...scope].map(([id, s]) => [id, s.sections])), routing },
       );
 
       ledger.runId = plan.runId;
@@ -211,15 +254,20 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
 
     async resumeRun(runId) {
       const run = db.runs.get(runId);
-      if (!run) throw new Error(`Прогін ${runId} не знайдено`);
+      if (!run) throw new Error(ui().run.notFound(runId));
       if (active.has(runId)) return;
 
       const cloudAllowed = cloudAllowedFor(run.specVersionId);
       const current = settings();
-      const judge = providers.resolveProvider('judge', current, { cloudAllowed });
-      const critic = run.modelCritic
-        ? providers.resolveProvider('critic', current, { cloudAllowed })
-        : null;
+
+      // Продовжуємо на тих моделях, з якими прогін стартував (разом із
+      // перевизначенням із конфігурації прогону), а не на поточних налаштуваннях:
+      // інакше половина findings прийшла б від іншої моделі, ніж записано в
+      // `model_judge`. Старі прогони маршрутизації не зберігали — для них, як і
+      // раніше, діють поточні налаштування.
+      const routingOverride = launchRouting(db.runs.launchSettings(runId)?.routing ?? null);
+      const judge = resolve('judge', { cloudAllowed, routingOverride });
+      const critic = run.modelCritic ? resolve('critic', { cloudAllowed, routingOverride }) : null;
 
       db.runTasks.requeueStale(runId);
       db.runTasks.requeueFailed(runId);
@@ -264,33 +312,92 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
       },
       onFinding: (finding) => events.emit('run:finding', { runId, finding }),
     })
+      // Прибираємо з активних ДО `run:finished`: інакше «Продовжити», натиснуте
+      // одразу після події, побачило б прогін ще живим і тихо нічого не зробило.
+      .finally(() => {
+        active.delete(runId);
+      })
       .then((report) => {
+        // Пауза — не фінал: прогін продовжиться кнопкою «Продовжити», прогрес уже надіслано.
+        if (report.status === 'paused') return;
+        const error =
+          report.fatalError ??
+          (report.failedTasks.length > 0
+            ? ui().run.tasksNotCompleted(report.failedTasks.length)
+            : undefined);
         events.emit('run:finished', {
           runId,
           status: report.status,
-          ...(report.failedTasks.length > 0
-            ? { error: `Не виконано завдань: ${report.failedTasks.length}` }
-            : {}),
+          ...(error ? { error } : {}),
         });
       })
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorText(uiLanguageOf(db), error);
         db.runs.markFinished(runId, 'failed', message);
         events.emit('run:finished', { runId, status: 'failed', error: message });
-        events.toast('error', `Прогін ${runId} впав: ${message}`);
-      })
-      .finally(() => {
-        active.delete(runId);
+        events.toast('error', ui().run.crashed(runId, message));
       });
   }
+
+  /**
+   * Модель судження і її ціни — так само, як їх обере `startRun`
+   * (налаштування + перевизначення з конфігурації прогону).
+   *
+   * Оцінка корисна й до того, як усе налаштовано: якщо провайдер ще без ключа
+   * чи хмару заборонено, беремо модель із маршрутизації без перевірок доступу,
+   * а за нею — модель судження за замовчуванням.
+   */
+  function judgeForEstimate(config: RunConfig): JudgePricing {
+    const routingOverride = config.routing ?? null;
+    try {
+      const { provider, model } = providers.resolveProvider('judge', settings(), {
+        cloudAllowed: cloudAllowedFor(config.specVersionId),
+        routingOverride,
+      });
+      return { model: model.model, pricing: pricingOf(provider, model.model) };
+    } catch {
+      const ref = routedJudge(routingOverride);
+      return { model: ref.model, pricing: pricingOf(providers.get(ref.provider), ref.model) };
+    }
+  }
+
+  /**
+   * Маршрутизація судження без перевірок доступу — так само, як її розв'яже
+   * `resolveProvider` (з моделлю провайдера за замовчуванням, якщо модель не
+   * вибрано). Зовсім без моделі — модель судження за замовчуванням.
+   */
+  function routedJudge(override: Partial<Record<Stage, ModelRef>> | null): ModelRef {
+    const ref = providers.routingFor('judge', settings(), override);
+    return ref.model ? ref : DEFAULT_ROUTING.judge;
+  }
+}
+
+/** Перевизначення маршрутизації для resume з зафіксованої на старті. */
+function launchRouting(routing: RunRouting | null): Partial<Record<Stage, ModelRef>> | null {
+  if (!routing) return null;
+  return routing.critic ? { judge: routing.judge, critic: routing.critic } : { judge: routing.judge };
 }
 
 // ─── Оцінка вартості ─────────────────────────────────────────────────────────
 
+/** Модель судження, за якою рахуємо оцінку. `pricing: null` — ціна невідома. */
+interface JudgePricing {
+  model: string;
+  pricing: ModelPricing | null;
+}
+
+/**
+ * Ціни моделі: спершу від самого провайдера (живий каталог OpenRouter тощо),
+ * потім із вбудованої таблиці. Невідома модель — `null`, ціну не вигадуємо.
+ */
+function pricingOf(provider: LlmProvider | undefined, model: string): ModelPricing | null {
+  return provider?.pricingFor?.(model) ?? getPricing(model);
+}
+
 /** Груба, але миттєва оцінка: ~4 символи на токен. Мережу не чіпає. */
 const CHARS_PER_TOKEN = 4;
 
-function estimate(db: Db, config: RunConfig): RunEstimate {
+function estimate(db: Db, config: RunConfig, judge: JudgePricing): RunEstimate {
   const clauses = db.clauses.list(config.specVersionId);
   const sections = new Set(clauses.map((c) => c.sectionNo ?? 'inne'));
   const tasks = sections.size * config.documentVersionIds.length;
@@ -315,10 +422,17 @@ function estimate(db: Db, config: RunConfig): RunEstimate {
   // Вихід оцінюємо як ~300 токенів на вимогу (rationale + докази).
   const outputTokens = clauses.length * config.documentVersionIds.length * 300;
 
-  // Ціни Opus 5: $5/1M вхід, $25/1M вихід.
-  const costUsd = (inputTokens / 1_000_000) * 5 + (outputTokens / 1_000_000) * 25;
+  // Ціни — моделі судження з маршрутизації. Дешеві моделі коштують частки
+  // цента, тож округлюємо до 4 знаків, а не до центів: «$0.00» збрехало б.
+  const costUsd = judge.pricing
+    ? Math.round(
+        ((inputTokens / 1_000_000) * judge.pricing.inputPerMTok +
+          (outputTokens / 1_000_000) * judge.pricing.outputPerMTok) *
+          10_000,
+      ) / 10_000
+    : null;
 
-  return { tasks, inputTokens, costUsd: Math.round(costUsd * 100) / 100 };
+  return { tasks, inputTokens, costUsd, model: judge.model };
 }
 
 // ─── Допоміжне ───────────────────────────────────────────────────────────────
@@ -351,13 +465,12 @@ function latestReviewedClauses(db: Db): ClauseIndex {
  * яких у проекті немає — краще чесна помилка, ніж мовчазний неповний файл.
  */
 export function exportRunToFile(db: Db, runId: number, format: ExportFormat): { path: string } {
+  const ui = uiMessages(db);
   const run = db.runs.get(runId);
-  if (!run) throw new Error(`Прогін ${runId} не знайдено`);
+  if (!run) throw new Error(ui.run.notFound(runId));
 
   if (format === 'xlsx' || format === 'pdf') {
-    throw new Error(
-      `Експорт у ${format.toUpperCase()} ще не реалізовано — потрібна окрема бібліотека. Доступні формати: JSON, Markdown.`,
-    );
+    throw new Error(ui.exporting.notImplemented(format.toUpperCase()));
   }
 
   const summary = db.runs.summary(runId);
@@ -371,28 +484,40 @@ export function exportRunToFile(db: Db, runId: number, format: ExportFormat): { 
     return { path };
   }
 
-  writeFileSync(path, renderMarkdown(db, runId, summary, findings, gaps), 'utf8');
+  // Звіт — частина результатів: мовою, якою прогін писав висновки
+  // (у старих прогонів її не записано — тоді поточна мова результатів).
+  const language = db.runs.launchSettings(runId)?.resultsLanguage ?? resultsLanguageOf(db);
+  writeFileSync(
+    path,
+    renderMarkdown(resultsMessages(language).export, runId, summary, findings, gaps),
+    'utf8',
+  );
   return { path };
 }
 
+/**
+ * Markdown-звіт. Заголовки й підписи — мовою результатів; вердикти й severity
+ * перекладено тими самими словами, що й у самому звіті (у JSON лишаються коди).
+ */
 function renderMarkdown(
-  db: Db,
+  m: MainMessages['export'],
   runId: number,
   summary: ReturnType<Db['runs']['summary']>,
   findings: ReturnType<Db['findings']['listByRun']>,
   gaps: ReturnType<Db['runs']['gaps']>,
 ): string {
-  const lines: string[] = [`# Аудит — прогін ${runId}`, ''];
+  const lines: string[] = [`# ${m.title(runId)}`, ''];
 
-  lines.push('## Підсумок', '');
-  lines.push(`- Застосовних вимог: ${summary.clausesApplicable}`);
-  lines.push(`- Оцінено: ${summary.clausesAssessed}`);
-  lines.push(`- Прогалин: ${summary.gaps}`);
-  lines.push(`- Вартість: $${summary.usage.costUsd.toFixed(4)}`, '');
+  lines.push(`## ${m.summary}`, '');
+  lines.push(`- ${m.applicable(summary.clausesApplicable)}`);
+  lines.push(`- ${m.assessed(summary.clausesAssessed)}`);
+  lines.push(`- ${m.gaps(summary.gaps)}`);
+  lines.push(`- ${m.cost(`$${summary.usage.costUsd.toFixed(4)}`)}`, '');
 
-  lines.push('| Вердикт | Кількість |', '|---|---|');
-  for (const [verdict, count] of Object.entries(summary.counts)) {
-    if (count > 0) lines.push(`| ${verdict} | ${count} |`);
+  lines.push(`| ${m.colVerdict} | ${m.colCount} |`, '|---|---|');
+  for (const verdict of VERDICTS) {
+    const count = summary.counts[verdict] ?? 0;
+    if (count > 0) lines.push(`| ${m.verdicts[verdict]} | ${count} |`);
   }
   lines.push('');
 
@@ -400,28 +525,28 @@ function renderMarkdown(
     (f) => f.verdict === 'non_compliant' || f.verdict === 'partial',
   );
   if (problems.length > 0) {
-    lines.push('## Невідповідності', '');
+    lines.push(`## ${m.nonConformities}`, '');
     for (const f of problems) {
       lines.push(`### ${f.clause.clauseNo} — ${f.clause.topic ?? ''}`.trim());
-      lines.push(`**Вердикт:** ${f.verdict}${f.severity ? ` (${f.severity})` : ''}`, '');
+      const severity = f.severity ? ` (${m.severities[f.severity]})` : '';
+      lines.push(`**${m.verdictLabel}:** ${m.verdicts[f.verdict]}${severity}`, '');
       lines.push(f.rationale, '');
-      if (f.gap) lines.push(`**Чого бракує:** ${f.gap}`, '');
-      if (f.recommendation) lines.push(`**Рекомендація:** ${f.recommendation}`, '');
+      if (f.gap) lines.push(`**${m.gapLabel}:** ${f.gap}`, '');
+      if (f.recommendation) lines.push(`**${m.recommendationLabel}:** ${f.recommendation}`, '');
       for (const e of f.evidence) {
-        lines.push(`> ${e.quote}${e.pageNo ? ` _(стор. ${e.pageNo})_` : ''}`);
+        lines.push(`> ${e.quote}${e.pageNo ? ` _(${m.page(e.pageNo)})_` : ''}`);
       }
       lines.push('');
     }
   }
 
   if (gaps.length > 0) {
-    lines.push('## Прогалини — вимоги без жодного доказу', '');
-    lines.push('| Вимога | Секція | Тема |', '|---|---|---|');
+    lines.push(`## ${m.gapsTitle}`, '');
+    lines.push(`| ${m.colClause} | ${m.colSection} | ${m.colTopic} |`, '|---|---|---|');
     for (const g of gaps) {
       lines.push(`| ${g.clauseNo} | ${g.sectionTitle ?? g.sectionNo ?? '—'} | ${g.topic ?? ''} |`);
     }
   }
 
-  void db;
   return lines.join('\n');
 }

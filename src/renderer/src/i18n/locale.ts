@@ -3,9 +3,15 @@
  * щоб логіку можна було перевірити юніт-тестом і викликати будь-звідки.
  */
 
-export const LOCALES = ['en', 'uk'] as const;
+import { LANGUAGES, isLanguage, type Language } from '@shared/domain';
 
-export type Locale = (typeof LOCALES)[number];
+/**
+ * Мови інтерфейсу — той самий список, що й мови висновків у main. Один джерельний
+ * перелік: додати мову в UI й забути про неї в main (або навпаки) неможливо.
+ */
+export const LOCALES = LANGUAGES;
+
+export type Locale = Language;
 
 /** `system` — брати мову ОС; решта — явний вибір користувача. */
 export type LocalePreference = 'system' | Locale;
@@ -13,8 +19,19 @@ export type LocalePreference = 'system' | Locale;
 /** Англійська — мова за замовчуванням: нею падаємо для всього непідтримуваного. */
 export const DEFAULT_LOCALE: Locale = 'en';
 
+/**
+ * Самоназви мов. Свідомо НЕ в каталогах: «Nederlands» має читатись як
+ * «Nederlands» і з українського інтерфейсу — інакше людина, що не читає
+ * поточну мову, не знайде свою.
+ */
+export const LOCALE_NAMES: Record<Locale, string> = {
+  en: 'English',
+  nl: 'Nederlands',
+  uk: 'Українська',
+};
+
 export function isLocale(value: unknown): value is Locale {
-  return typeof value === 'string' && (LOCALES as readonly string[]).includes(value);
+  return isLanguage(value);
 }
 
 export function isLocalePreference(value: unknown): value is LocalePreference {
@@ -22,11 +39,12 @@ export function isLocalePreference(value: unknown): value is LocalePreference {
 }
 
 /**
- * Порівнюємо лише базовий субтег ('uk-UA' → 'uk'): регіон на вибір мови не впливає.
+ * Порівнюємо лише базовий субтег ('uk-UA' → 'uk', 'nl-BE' → 'nl'): регіон на вибір
+ * мови не впливає.
  */
 export function resolveLocale(preference: LocalePreference, systemLocale?: string | null): Locale {
   if (preference !== 'system') return preference;
-  const base = (systemLocale ?? '').toLowerCase().split('-')[0] ?? '';
+  const base = (systemLocale ?? '').toLowerCase().split(/[-_]/)[0] ?? '';
   return isLocale(base) ? base : DEFAULT_LOCALE;
 }
 
@@ -34,4 +52,19 @@ export function resolveLocale(preference: LocalePreference, systemLocale?: strin
 export function systemLocale(): string {
   if (typeof navigator === 'undefined') return '';
   return navigator.language ?? '';
+}
+
+/**
+ * Чи треба повідомити main про мову інтерфейсу.
+ *
+ * Пишемо лише коли збережене значення розходиться з фактичним. `lastSent` —
+ * мова, яку вже пробували записати в цій сесії: якщо main її не зберіг (старий
+ * бекенд, помилка), повторювати запис на кожен рендер марно й шумно.
+ */
+export function needsUiLanguageSync(
+  stored: unknown,
+  resolved: Locale,
+  lastSent: Locale | null,
+): boolean {
+  return stored !== resolved && lastSent !== resolved;
 }

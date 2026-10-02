@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LocalizedError } from '@main/i18n';
 import { LlmCloudBlockedError, LlmError, LlmNotConfiguredError } from '@main/llm';
 import {
   IPC_ERROR_CODES,
@@ -42,7 +43,7 @@ describe('формат повідомлення', () => {
 
   it('переживає обгортку Electron «Error invoking remote method»', () => {
     const raw = `Error invoking remote method 'documents:get': Error: ${formatIpcErrorMessage(
-      notFound('Документ', 42).shape,
+      notFound('document', 42).shapeIn('uk'),
     )}`;
 
     expect(parseIpcErrorMessage(raw)).toEqual({
@@ -54,6 +55,38 @@ describe('формат повідомлення', () => {
   it('повертає null для чужого повідомлення', () => {
     expect(parseIpcErrorMessage('ECONNREFUSED 127.0.0.1:11434')).toBeNull();
     expect(parseIpcErrorMessage('[WHATEVER] щось')).toBeNull();
+  });
+});
+
+describe('мова повідомлень', () => {
+  it('ключ каталогу рендериться мовою, яку обирає межа IPC', () => {
+    const err = validation((m) => m.runs.noDocuments, { field: 'documentVersionIds' });
+
+    // `message` — англійською, для логів і стеків.
+    expect(err.message).toBe('No documents selected for the run');
+    expect(err.shape).toEqual({
+      code: 'VALIDATION',
+      message: 'No documents selected for the run',
+      details: { field: 'documentVersionIds' },
+    });
+    expect(err.shapeIn('uk').message).toBe('Не вибрано жодного документа для прогону');
+    expect(err.shapeIn('nl').message).toBe('Er zijn geen documenten geselecteerd voor de auditrun');
+  });
+
+  it('notFound складає фразу каталогом: відмінок і порядок слів різні', () => {
+    expect(notFound('specification', 7).localize('en')).toBe('Specification 7 not found');
+    expect(notFound('specification', 7).localize('uk')).toBe('Специфікацію 7 не знайдено');
+    expect(notFound('specification', 7).localize('nl')).toBe('Norm 7 niet gevonden');
+    expect(notFound('blob').localize('en')).toBe('Blob not found');
+  });
+
+  it('готовий рядок лишається як є в будь-якій мові', () => {
+    expect(validation('raw text').localize('uk')).toBe('raw text');
+  });
+
+  it('serializeIpcError віддає текст мовою інтерфейсу', () => {
+    const outbound = serializeIpcError(notFound('run', 5), 'runs:get', { error: () => {} }, 'uk');
+    expect(outbound.message).toBe('[NOT_FOUND] Прогін 5 не знайдено');
   });
 });
 
@@ -77,6 +110,38 @@ describe('toIpcError', () => {
   it('усе інше — INTERNAL', () => {
     expect(toIpcError(new Error('бум')).code).toBe('INTERNAL');
     expect(toIpcError('рядок').code).toBe('INTERNAL');
+  });
+
+  it('помилки LLM отримують людський текст мовою інтерфейсу', () => {
+    const credit = new LlmError('insufficient_credit', 'credit balance is too low', {
+      providerId: 'openrouter',
+    });
+    const message = toIpcError(credit, 'uk').localize('uk');
+    expect(message).toContain('Вичерпано баланс OpenRouter');
+    expect(message).toContain('credit balance is too low');
+
+    const unconfigured = toIpcError(new LlmNotConfiguredError('anthropic'), 'nl');
+    expect(unconfigured.code).toBe('PROVIDER_NOT_CONFIGURED');
+    expect(unconfigured.localize('nl')).toContain('Anthropic is niet geconfigureerd');
+  });
+
+  it('помилки шарів без мови (LocalizedError) локалізуються тут', () => {
+    const deep = new LocalizedError((m) => m.secrets.encryptionUnavailable);
+    expect(deep.message).toContain('safeStorage');
+
+    const ipc = toIpcError(deep, 'uk');
+    expect(ipc.code).toBe('INTERNAL');
+    expect(ipc.localize('uk')).toContain('Системне сховище паролів');
+  });
+
+  it('порушення цілісності SQLite — VALIDATION мовою інтерфейсу', () => {
+    const sqlite = Object.assign(new Error('FOREIGN KEY constraint failed'), {
+      code: 'SQLITE_CONSTRAINT_FOREIGNKEY',
+    });
+    const ipc = toIpcError(sqlite, 'uk');
+    expect(ipc.code).toBe('VALIDATION');
+    expect(ipc.shapeIn('uk').message).toContain('суперечить цілісності даних');
+    expect(ipc.shapeIn('en').message).toContain('data integrity');
   });
 });
 

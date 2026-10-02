@@ -408,7 +408,7 @@ function MetadataModal({ doc, onClose }: { doc: DocumentDto; onClose: () => void
             <input
               className="input"
               value={processOwner}
-              placeholder="Proceseigenaar"
+              placeholder={t.library.ownerPlaceholder}
               onChange={(e) => setProcessOwner(e.target.value)}
             />
           </label>

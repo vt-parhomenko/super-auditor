@@ -6,15 +6,29 @@
  * Тому код помилки кодуємо в САМЕ повідомлення сталим префіксом `[CODE] …`,
  * який переживає обгортку Electron і чиститься `cleanMessage` у renderer.
  *
- *   throw notFound('Документ', 42);
- *   // renderer бачить: "[NOT_FOUND] Документ 42 не знайдено"
+ *   throw notFound('document', 42);
+ *   // renderer (мова інтерфейсу uk) бачить: "[NOT_FOUND] Документ 42 не знайдено"
  *   // parseIpcErrorMessage(msg) → { code: 'NOT_FOUND', message: 'Документ 42 не знайдено' }
+ *
+ * Мова. Текст помилки — мовою інтерфейсу, але хендлер її не знає й знати не
+ * мусить: повідомлення задається функцією від каталогу (`(m) => m.runs.noDocuments`),
+ * а рендерить його межа IPC (`serializeIpcError`) мовою з налаштувань. Так само
+ * помилки глибших шарів (LLM, SQLite, secrets) отримують людський текст у
+ * `toIpcError`. `Error.message` — англійською, для логів і стеків.
  *
  * Стек НІКОЛИ не їде в renderer: повний стек логується в main, назовні
  * віддається свіжий `Error` із порожнім стеком.
  */
 
+import {
+  DEFAULT_LANGUAGE,
+  LocalizedError,
+  describeLlmError,
+  providerName,
+  type MainMessages,
+} from '@main/i18n';
 import { isLlmError } from '@main/llm';
+import type { Language } from '@shared/domain';
 
 export const IPC_ERROR_CODES = [
   /** Сутності з таким id немає. */
@@ -49,22 +63,34 @@ export function isIpcErrorCode(value: unknown): value is IpcErrorCode {
   return typeof value === 'string' && CODE_SET.has(value);
 }
 
+/**
+ * Текст помилки: готовий рядок (уже потрібною мовою або сирий текст ззовні)
+ * чи функція від каталогу — тоді мову обирає межа IPC.
+ */
+export type IpcMessage = string | ((messages: MainMessages) => string);
+
 /** Помилка з кодом, який renderer може розрізнити. */
-export class IpcError extends Error {
+export class IpcError extends LocalizedError {
   readonly code: IpcErrorCode;
   readonly details: unknown;
 
-  constructor(code: IpcErrorCode, message: string, details?: unknown) {
-    super(message);
+  constructor(code: IpcErrorCode, message: IpcMessage, details?: unknown) {
+    super(typeof message === 'function' ? message : () => message);
     this.name = 'IpcError';
     this.code = code;
     this.details = details;
   }
 
+  /** Форма для транспорту. Без мови — англійською (`message`). */
   get shape(): IpcErrorShape {
+    return this.shapeIn(DEFAULT_LANGUAGE);
+  }
+
+  shapeIn(language: Language): IpcErrorShape {
+    const message = this.localize(language);
     return this.details === undefined
-      ? { code: this.code, message: this.message }
-      : { code: this.code, message: this.message, details: this.details };
+      ? { code: this.code, message }
+      : { code: this.code, message, details: this.details };
   }
 }
 
@@ -74,70 +100,89 @@ export function isIpcError(err: unknown): err is IpcError {
 
 // ─── Конструктори ────────────────────────────────────────────────────────────
 
-export function notFound(entity: string, id?: unknown, details?: unknown): IpcError {
-  const what = id === undefined || id === null ? entity : `${entity} ${String(id)}`;
-  return new IpcError('NOT_FOUND', `${what} не знайдено`, details);
+/** Сутності, про які можна сказати «не знайдено». */
+export type NotFoundEntity = keyof MainMessages['ipc']['entities'];
+
+/**
+ * Сутність за ключем, а не готовою назвою: порядок слів і відмінок різні в
+ * кожній мові («Специфікацію 42 не знайдено»), тож фразу складає каталог.
+ */
+export function notFound(entity: NotFoundEntity, id?: unknown, details?: unknown): IpcError {
+  return new IpcError(
+    'NOT_FOUND',
+    (m) => {
+      const name = m.ipc.entities[entity];
+      return m.ipc.notFound(id === undefined || id === null ? name : `${name} ${String(id)}`);
+    },
+    details,
+  );
 }
 
-export function validation(message: string, details?: unknown): IpcError {
+export function validation(message: IpcMessage, details?: unknown): IpcError {
   return new IpcError('VALIDATION', message, details);
 }
 
-export function cloudBlocked(message: string, details?: unknown): IpcError {
+export function cloudBlocked(message: IpcMessage, details?: unknown): IpcError {
   return new IpcError('CLOUD_BLOCKED', message, details);
 }
 
-export function providerNotConfigured(providerId: string, message?: string): IpcError {
+export function providerNotConfigured(providerId: string, message?: IpcMessage): IpcError {
   return new IpcError(
     'PROVIDER_NOT_CONFIGURED',
-    message ?? `Провайдер «${providerId}» не налаштовано: немає ключа API або ендпоінта`,
+    message ?? ((m) => m.llm.notConfigured(providerName(providerId))),
     { providerId },
   );
 }
 
-export function busy(message: string, details?: unknown): IpcError {
+export function busy(message: IpcMessage, details?: unknown): IpcError {
   return new IpcError('BUSY', message, details);
 }
 
-export function internal(message: string, details?: unknown): IpcError {
+export function internal(message: IpcMessage, details?: unknown): IpcError {
   return new IpcError('INTERNAL', message, details);
 }
 
 // ─── Мапінг чужих помилок ────────────────────────────────────────────────────
 
-/** Будь-що → `IpcError`. Помилки шару LLM розкладаються по кодах, решта — INTERNAL. */
-export function toIpcError(err: unknown): IpcError {
+/**
+ * Будь-що → `IpcError`. Помилки шару LLM розкладаються по кодах, решта — INTERNAL.
+ *
+ * `language` — мова інтерфейсу: помилки LLM (сирий текст провайдера) і помилки
+ * шарів без доступу до мови (`LocalizedError`) отримують тут людський текст.
+ * `IpcError` повертається як є — свій текст він відрендерить сам.
+ */
+export function toIpcError(err: unknown, language: Language = DEFAULT_LANGUAGE): IpcError {
   if (isIpcError(err)) return err;
 
   if (isLlmError(err)) {
+    const message = describeLlmError(language, err);
     switch (err.kind) {
       case 'cloud_blocked':
-        return cloudBlocked(err.message, { providerId: err.providerId, stage: err.stage });
+        return cloudBlocked(message, { providerId: err.providerId, stage: err.stage });
       case 'not_configured':
       case 'auth':
       case 'model_not_found':
-        return new IpcError('PROVIDER_NOT_CONFIGURED', err.message, {
+        return new IpcError('PROVIDER_NOT_CONFIGURED', message, {
           providerId: err.providerId,
           kind: err.kind,
         });
       case 'rate_limit':
-        return busy(err.message, { providerId: err.providerId });
+        return busy(message, { providerId: err.providerId });
       default:
-        return new IpcError('INTERNAL', err.message, {
+        return new IpcError('INTERNAL', message, {
           providerId: err.providerId,
           kind: err.kind,
         });
     }
   }
 
+  if (err instanceof LocalizedError) return internal(err.localize(language));
+
   // better-sqlite3 кидає SqliteError з кодом на кшталт SQLITE_CONSTRAINT_FOREIGNKEY.
   // Для користувача це не «внутрішня помилка», а заборонена дія.
   const sqliteCode = sqliteErrorCode(err);
   if (sqliteCode) {
-    return validation(
-      `Дія суперечить цілісності даних (${sqliteCode}) — можливо, запис уже використано в іншому місці`,
-      { sqlite: sqliteCode },
-    );
+    return validation((m) => m.ipc.integrity(sqliteCode), { sqlite: sqliteCode });
   }
 
   if (err instanceof Error) return internal(err.message);
@@ -197,12 +242,14 @@ export function serializeIpcError(
   err: unknown,
   channel: string,
   logger: ErrorLogger = console,
+  language: Language = DEFAULT_LANGUAGE,
 ): Error {
-  const ipcError = toIpcError(err);
+  const ipcError = toIpcError(err, language);
+  const shape = ipcError.shapeIn(language);
   const original = err instanceof Error ? (err.stack ?? err.message) : String(err);
-  logger.error(`[ipc] ${channel} → ${ipcError.code}: ${ipcError.message}\n${original}`);
+  logger.error(`[ipc] ${channel} → ${ipcError.code}: ${shape.message}\n${original}`);
 
-  const outbound = new Error(formatIpcErrorMessage(ipcError.shape));
+  const outbound = new Error(formatIpcErrorMessage(shape));
   // Ім'я лишаємо 'Error', щоб renderer зчистив префікс своїм `cleanMessage`.
   outbound.name = 'Error';
   outbound.stack = `Error: ${outbound.message}`;

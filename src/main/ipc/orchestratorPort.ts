@@ -11,21 +11,17 @@
  */
 
 import type { DocProfileDto, RunConfig } from '@shared/domain';
-import type { ExportFormat } from '@shared/ipc';
+import type { ExportFormat, RunEstimateDto } from '@shared/ipc';
 import { internal } from './errors';
 
-export interface RunEstimate {
-  tasks: number;
-  inputTokens: number;
-  costUsd: number;
-}
+export type RunEstimate = RunEstimateDto;
 
 export interface RunOrchestrator {
   /** Stage 1: LLM-екстракт реєстру вимог. Повертає id фонового завдання (прогону). */
   extractClauses(specVersionId: number): Promise<number>;
   /** Stage 2: профіль версії документа. */
   buildDocProfile(documentVersionId: number): Promise<DocProfileDto>;
-  /** Оцінка вартості до старту (count_tokens), без жодного платного виклику. */
+  /** Груба оцінка вартості до старту за цінами моделі судження, без жодного платного виклику. */
   estimateRun(config: RunConfig): Promise<RunEstimate>;
   /** Створює прогін і запускає його. Повертає `audit_run.id`. */
   startRun(config: RunConfig): Promise<number>;
@@ -46,13 +42,10 @@ export function hasOrchestrator(): boolean {
   return current !== null;
 }
 
-/** Поточна реалізація або зрозуміла помилка. */
+/** Поточна реалізація або зрозуміла помилка (мовою інтерфейсу — її обере межа IPC). */
 export function requireOrchestrator(): RunOrchestrator {
   if (!current) {
-    throw internal(
-      'Оркестратор ще не підключено — операції прогону недоступні в цій збірці',
-      { port: 'orchestrator' },
-    );
+    throw internal((m) => m.ipc.orchestratorMissing, { port: 'orchestrator' });
   }
   return current;
 }

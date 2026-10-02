@@ -12,6 +12,7 @@
  * Будь-яка перестановка ламає `charStart/charEnd` (див. normalize.ts).
  */
 
+import { LocalizedError } from '@main/i18n';
 import type { ExtractionMethod, PageRange } from '@shared/domain';
 import { extractDocx } from './docx';
 import { MIME_DOCX, MIME_PDF, mimeFromExt } from './mime';
@@ -91,12 +92,13 @@ export function isSupportedMime(mime: string): boolean {
   return mime === MIME_PDF || mime === MIME_DOCX;
 }
 
-export class UnsupportedFormatError extends Error {
+/**
+ * Stage 0 читає лише PDF (pdfjs) і DOCX (mammoth). Текст для людини будує межа
+ * імпорту мовою інтерфейсу — сам модуль мови не знає.
+ */
+export class UnsupportedFormatError extends LocalizedError {
   constructor(readonly mime: string) {
-    super(
-      `Формат «${mime}» не підтримується. Stage 0 читає PDF (pdfjs) і DOCX (mammoth); ` +
-        'решту треба спершу конвертувати.',
-    );
+    super((m) => m.importing.unsupportedFormat(mime));
     this.name = 'UnsupportedFormatError';
   }
 }

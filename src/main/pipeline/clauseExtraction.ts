@@ -1,8 +1,10 @@
 import type { Db } from '@main/db';
 import type { ClauseInput } from '@main/db';
+import { errorText, uiLanguageOf, uiMessages } from '@main/i18n';
 import {
   buildRequest,
   clauseExtractV1,
+  isFatalLlmError,
   type ClauseExtractItem,
   type ClauseExtractOutput,
   type CompleteResult,
@@ -232,6 +234,7 @@ export interface ClauseExtractionProgress {
   pageCount: number;
   clausesFound: number;
   done: boolean;
+  /** Пояснення мовою інтерфейсу — іде прямо в `clauses:extractProgress`. */
   error?: string;
 }
 
@@ -268,12 +271,15 @@ export async function extractClausesForSpec(
   specVersionId: number,
   options: ClauseExtractionOptions = {},
 ): Promise<ClauseExtractionReport> {
+  const ui = uiMessages(db);
+  const uiLanguage = uiLanguageOf(db);
+
   const version = db.specs.getVersion(specVersionId);
-  if (!version) throw new Error(`Версія специфікації ${specVersionId} не знайдена`);
-  if (version.extractionId === null) throw new Error('Для цієї версії немає екстракції тексту');
+  if (!version) throw new Error(ui.run.specVersionNotFound(specVersionId));
+  if (version.extractionId === null) throw new Error(ui.clauses.noExtraction);
 
   const extraction = db.extractions.get(version.extractionId);
-  if (!extraction) throw new Error('Екстракцію тексту не знайдено');
+  if (!extraction) throw new Error(ui.clauses.extractionMissing);
 
   const spec = db.specs.get(version.specificationId);
   const pages = extraction.pages.map((p) => extraction.text.slice(p.charStart, p.charEnd));
@@ -291,6 +297,9 @@ export async function extractClausesForSpec(
 
   const controller = new AbortController();
   options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
+
+  /** Баланс, ключ, доступ: наступні сторінки так само приречені — зупиняємось. */
+  let fatal: string | null = null;
 
   const runPage = async (page: PageSelection): Promise<void> => {
     const request = buildRequest(
@@ -326,7 +335,12 @@ export async function extractClausesForSpec(
         done: false,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // Текст іде на екран (прогрес екстракції), тож — мовою інтерфейсу.
+      const message = errorText(uiLanguage, error);
+      if (isFatalLlmError(error) && fatal === null) {
+        fatal = message;
+        controller.abort();
+      }
       failedPages.push({ pageNo: page.pageNo, error: message });
       processed += 1;
       options.onProgress?.({
@@ -340,6 +354,29 @@ export async function extractClausesForSpec(
   };
 
   await runWithConcurrency(selected, options.concurrency ?? 4, runPage, controller.signal);
+
+  // Реєстр замінюється ЦІЛКОМ (deleteAll + createMany), а з ним каскадом ідуть
+  // ручні перевизначення застосовності. Тож неповний результат не має права
+  // затерти наявний реєстр: ні після фатальної помилки (вичерпаний баланс на
+  // першій же сторінці дав би порожній реєстр), ні коли не вдалася жодна
+  // сторінка, ні — якщо щось не вдалося — поверх уже вичитаного вручну.
+  const keepReason =
+    fatal ??
+    (selected.length > 0 && failedPages.length === selected.length
+      ? ui.clauses.allPagesFailed(failedPages[0]?.error ?? '')
+      : failedPages.length > 0 && version.clausesStatus === 'reviewed'
+        ? ui.clauses.reviewedKept(failedPages.length)
+        : null);
+  if (keepReason !== null) {
+    options.onProgress?.({
+      page: selected.length,
+      pageCount: selected.length,
+      clausesFound: 0,
+      done: true,
+      error: keepReason,
+    });
+    throw new Error(keepReason);
+  }
 
   // Порядок сторінок відновлюємо явно: конкурентні виклики завершуються врізнобій,
   // а зшивання продовжень залежить від послідовності.

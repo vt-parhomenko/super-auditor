@@ -8,8 +8,9 @@
 
 import { z } from 'zod';
 import { SEVERITIES } from '@shared/domain';
+import type { ResultsLanguage } from '@shared/domain';
 import type { PromptDef } from '../types';
-import { clip, joinBlocks, tag } from './util';
+import { clip, joinBlocks, languageInstruction, languageKey, tag } from './util';
 
 export interface SpecSummaryInput {
   specName: string;
@@ -21,6 +22,12 @@ export interface SpecSummaryInput {
   sections?: Array<{ sectionNo: string; sectionTitle: string | null }>;
   /** Скільки символів тексту спеки віддати моделі. */
   maxTextChars?: number;
+  /**
+   * Мова самарі (summary, scope, посекційні самарі) — їх показує екран реєстру
+   * вимог. `gradingRules` — дослівний витяг і не перекладається ніколи: він іде
+   * в промпт судження, і перефразований поріг зіпсував би кожну severity.
+   */
+  language?: ResultsLanguage;
 }
 
 export const gradingRulesSchema = z.object({
@@ -109,6 +116,13 @@ export const specSummaryV1: PromptDef<SpecSummaryInput, SpecSummaryOutput> = {
         ? 'Produce one sectionSummaries entry for each section above, in the same order.'
         : 'Leave sectionSummaries empty — no section list was supplied.',
       'Extract the grading rules into gradingRules, including the verbatim text of the grading section.',
+      languageInstruction(input.language, {
+        fields: ['summary', 'scope', 'sectionSummaries[].summary'],
+        keep:
+          'Never translate `gradingRules`: its `rawText`, definitions, rating labels and criteria are a verbatim ' +
+          'extract and stay in the original language of the standard. Keep section numbers, section titles ' +
+          'and severity levels unchanged as the schema defines them.',
+      }),
     );
   },
 
@@ -120,6 +134,8 @@ export const specSummaryV1: PromptDef<SpecSummaryInput, SpecSummaryOutput> = {
       specText: input.specText,
       sections: input.sections ?? [],
       maxTextChars: input.maxTextChars ?? null,
+      // Див. judge.v1: мова — частина ключа, порожня — не додає нічого.
+      ...languageKey(input.language),
     };
   },
 };

@@ -1,26 +1,33 @@
 import { useState } from 'react';
 
-import { STAGES, type SpendByStage, type Stage } from '@shared/domain';
+import { STAGES, isLanguage, type ResultsLanguage, type SpendByStage, type Stage } from '@shared/domain';
 import type { AppSettings, ProviderStatus } from '@shared/ipc';
+import { BalancePanel, ReportedSpend } from '@renderer/components/Balance';
 import { DataTable, type Column } from '@renderer/components/DataTable';
+import { ModelHint, ModelPicker } from '@renderer/components/ModelPicker';
 import { EmptyState, QueryState } from '@renderer/components/States';
 import {
   useClearApiKey,
   useProviders,
+  useRefreshModels,
   useSaveSettings,
   useSetApiKey,
   useSettings,
   useSpend,
   useTestProvider,
 } from '@renderer/hooks/useSettings';
-import { useLocale, useT, type LocalePreference } from '@renderer/i18n';
-import { formatCost, formatNumber, formatTokens } from '@renderer/lib/format';
+import { LOCALES, LOCALE_NAMES, useLocale, useT, type LocalePreference } from '@renderer/i18n';
+import { formatCost, formatDateTime, formatNumber, formatRelative, formatTokens } from '@renderer/lib/format';
 import { useLabels } from '@renderer/lib/labels';
+import { ANTHROPIC_BILLING_URL, OPENROUTER_CREDITS_URL, providerLinks } from '@renderer/lib/providerLinks';
 import { usePageContext } from '@renderer/store/topbar';
 import { useUiStore, type ThemePreference } from '@renderer/store/ui';
 import { toast } from '@renderer/store/ui';
 
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+/** Збережене значення могло прийти зі старих налаштувань ('de', 'fr'…) — показуємо «мовою стандарту». */
+function toResultsLanguage(value: unknown): ResultsLanguage {
+  return isLanguage(value) ? value : '';
+}
 
 export function SettingsPage() {
   const t = useT();
@@ -33,8 +40,14 @@ export function SettingsPage() {
   const setTheme = useUiStore((s) => s.setTheme);
   const { preference: localePreference, setPreference: setLocalePreference } = useLocale();
 
-  const patch = (updates: Partial<AppSettings>) =>
-    save.mutate(updates, { onError: (error) => toast('error', error.message) });
+  const patch = (updates: Partial<AppSettings>, onSuccess?: () => void) =>
+    save.mutate(updates, { onSuccess, onError: (error) => toast('error', error.message) });
+
+  // Самоназви мов — так їх знайде той, хто не читає поточну мову інтерфейсу.
+  const localeOptions: Array<[LocalePreference, string]> = [
+    ['system', t.settings.languageSystem],
+    ...LOCALES.map((code): [LocalePreference, string] => [code, LOCALE_NAMES[code]]),
+  ];
 
   return (
     <div className="page page-pad">
@@ -61,6 +74,7 @@ export function SettingsPage() {
               <button
                 key={value}
                 type="button"
+                aria-pressed={theme === value}
                 className={theme === value ? 'active' : ''}
                 onClick={() => {
                   setTheme(value);
@@ -78,18 +92,13 @@ export function SettingsPage() {
           <div className="row-between">
             <h3>{t.settings.languageTitle}</h3>
           </div>
-          {/* Назви мов лишаються самоназвами — так їх знайде той, хто не читає поточну. */}
           <div className="seg" role="group" aria-label={t.settings.languageGroup}>
-            {(
-              [
-                ['system', t.settings.languageSystem],
-                ['en', 'English'],
-                ['uk', 'Українська'],
-              ] as Array<[LocalePreference, string]>
-            ).map(([value, label]) => (
+            {localeOptions.map(([value, label]) => (
               <button
                 key={value}
                 type="button"
+                lang={value === 'system' ? undefined : value}
+                aria-pressed={localePreference === value}
                 className={localePreference === value ? 'active' : ''}
                 onClick={() => setLocalePreference(value)}
               >
@@ -109,9 +118,20 @@ export function SettingsPage() {
           {(current) => (
             <>
               <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }}>
-                <h3>{t.settings.routingTitle}</h3>
+                <div className="row-between">
+                  <h3>{t.settings.routingTitle}</h3>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    title={t.settings.routingResetTitle}
+                    disabled={Object.keys(current.routing).length === 0 || save.isPending}
+                    onClick={() => patch({ routing: {} }, () => toast('info', t.settings.routingResetDone))}
+                  >
+                    {t.settings.routingReset}
+                  </button>
+                </div>
                 <p className="small muted">{t.settings.routingHint}</p>
-                <div className="routing-row" style={{ fontWeight: 700, fontSize: 'var(--fs-xs)', color: 'var(--text-3)', textTransform: 'uppercase' }}>
+                <div className="routing-row routing-head" aria-hidden="true">
                   <span>{t.settings.colStage}</span>
                   <span>{t.settings.colProvider}</span>
                   <span>{t.settings.colModel}</span>
@@ -164,13 +184,13 @@ export function SettingsPage() {
                     <span className="label">{t.settings.resultsLanguageLabel}</span>
                     <select
                       className="select"
-                      value={current.resultsLanguage}
-                      onChange={(e) => patch({ resultsLanguage: e.target.value })}
+                      value={toResultsLanguage(current.resultsLanguage)}
+                      onChange={(e) => patch({ resultsLanguage: toResultsLanguage(e.target.value) })}
                     >
                       <option value="">{t.settings.resultsLanguageSpec}</option>
-                      {RESULTS_LANGUAGES.map((lang) => (
-                        <option key={lang.code} value={lang.code}>
-                          {lang.label}
+                      {LOCALES.map((code) => (
+                        <option key={code} value={code} lang={code}>
+                          {LOCALE_NAMES[code]}
                         </option>
                       ))}
                     </select>
@@ -207,30 +227,14 @@ export function SettingsPage() {
   );
 }
 
-
-/**
- * Мови результатів. Самоназви — щоб їх упізнав і той, хто не читає поточну мову
- * інтерфейсу. Порожній код означає «мовою стандарту».
- */
-const RESULTS_LANGUAGES: Array<{ code: string; label: string }> = [
-  { code: 'uk', label: 'Українська' },
-  { code: 'en', label: 'English' },
-  { code: 'nl', label: 'Nederlands' },
-  { code: 'de', label: 'Deutsch' },
-  { code: 'fr', label: 'Français' },
-  { code: 'es', label: 'Español' },
-  { code: 'pl', label: 'Polski' },
-  { code: 'it', label: 'Italiano' },
-];
-
-const ANTHROPIC_BILLING = 'https://console.anthropic.com/settings/billing';
-
 /**
  * Витрати застосунку.
  *
- * Свідомо НЕ називається балансом: у Anthropic немає ендпоінта залишку коштів,
- * тож це лише наш власний облік викликів. Справжній залишок — у консолі, куди
- * веде посилання нижче (зовнішні URL відкриває setWindowOpenHandler у main).
+ * Свідомо НЕ називається балансом: це наш власний облік викликів. В Anthropic
+ * ендпоінта залишку немає взагалі — справжній залишок лише в консолі. OpenRouter
+ * свої цифри віддає сам, і вони йдуть окремим блоком із підписом «за даними
+ * провайдера»: включають і виклики тим самим ключем поза застосунком, тож
+ * зливати їх із нашим обліком не можна. Зовнішні URL відкриває setWindowOpenHandler у main.
  */
 function SpendSection() {
   const t = useT();
@@ -310,6 +314,7 @@ function SpendSection() {
       >
         {(data) => (
           <>
+            <span className="section-title">{t.settings.spendCounted}</span>
             <div className="spend-totals">
               <div className="spend-total">
                 <span className="stat-label">{t.settings.spendToday}</span>
@@ -343,17 +348,18 @@ function SpendSection() {
         )}
       </QueryState>
 
+      <ReportedSpend />
+
       <div className="callout">
         <div>{t.settings.spendBalanceNote}</div>
-        <a
-          href={ANTHROPIC_BILLING}
-          target="_blank"
-          rel="noreferrer noopener"
-          className="btn btn-sm"
-          style={{ marginTop: 'var(--sp-2)' }}
-        >
-          {t.settings.spendOpenConsole} ↗
-        </a>
+        <div className="row wrap" style={{ marginTop: 'var(--sp-2)' }}>
+          <a href={ANTHROPIC_BILLING_URL} target="_blank" rel="noreferrer noopener" className="btn btn-sm">
+            {t.settings.spendOpenConsole} ↗
+          </a>
+          <a href={OPENROUTER_CREDITS_URL} target="_blank" rel="noreferrer noopener" className="btn btn-sm">
+            {t.settings.spendOpenOpenRouter} ↗
+          </a>
+        </div>
       </div>
     </section>
   );
@@ -370,64 +376,29 @@ function RoutingRow({
   providers: ProviderStatus[];
   onChange: (routing: AppSettings['routing']) => void;
 }) {
-  const t = useT();
   const labels = useLabels();
-  const entry = settings.routing[stage];
-  const providerId = entry?.provider ?? providers[0]?.id ?? '';
-  const provider = providers.find((p) => p.id === providerId);
-  const models = provider?.models ?? [];
-
-  const update = (patch: Partial<{ provider: string; model: string; effort: string }>) => {
-    const next: AppSettings['routing'] = {
-      ...settings.routing,
-      [stage]: {
-        provider: patch.provider ?? providerId,
-        model: patch.model ?? entry?.model ?? models[0] ?? '',
-        ...(patch.effort !== undefined
-          ? patch.effort
-            ? { effort: patch.effort }
-            : {}
-          : entry?.effort
-            ? { effort: entry.effort }
-            : {}),
-      },
-    };
-    onChange(next);
-  };
+  const entry = settings.routing[stage] ?? null;
 
   return (
     <div className="routing-row">
-      <span title={labels.stageHint[stage]}>
-        <span style={{ fontWeight: 600 }}>{labels.stage[stage]}</span>
+      <span className="routing-stage" title={labels.stageHint[stage]}>
+        {labels.stage[stage]}
       </span>
-      <select className="select" value={providerId} onChange={(e) => update({ provider: e.target.value, model: '' })}>
-        {providers.length === 0 && <option value="">{t.settings.providerNone}</option>}
-        {providers.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.label}
-            {p.cloud ? t.settings.providerCloud : t.settings.providerLocal}
-          </option>
-        ))}
-      </select>
-      <select className="select mono" value={entry?.model ?? ''} onChange={(e) => update({ model: e.target.value })}>
-        <option value="">{t.settings.modelDefault}</option>
-        {models.map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
-        ))}
-      </select>
-      <select className="select" value={entry?.effort ?? ''} onChange={(e) => update({ effort: e.target.value })}>
-        <option value="">—</option>
-        {EFFORTS.map((e) => (
-          <option key={e} value={e}>
-            {e}
-          </option>
-        ))}
-      </select>
+      <ModelPicker
+        value={entry}
+        providers={providers}
+        label={labels.stage[stage]}
+        onChange={(next) => onChange({ ...settings.routing, [stage]: next })}
+      />
+      <div className="routing-hint">
+        <ModelHint value={entry} providers={providers} />
+      </div>
     </div>
   );
 }
+
+/** Скільки моделей показати в картці, коли кураторського списку немає. */
+const CARD_MODELS_FALLBACK = 6;
 
 /** Ключ лише відправляється: контракт не має каналу для читання його назад. */
 function ProviderCard({ provider }: { provider: ProviderStatus }) {
@@ -436,6 +407,20 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
   const setApiKey = useSetApiKey();
   const clearApiKey = useClearApiKey();
   const test = useTestProvider();
+  const refresh = useRefreshModels();
+  const links = providerLinks(provider.id);
+
+  // У каталозі OpenRouter ~450 моделей: показуємо куровані, решту — лічильником.
+  const recommended = provider.modelInfo.filter((m) => m.recommended);
+  const shown = recommended.length > 0 ? recommended : provider.modelInfo.slice(0, CARD_MODELS_FALLBACK);
+  const total = provider.modelInfo.length;
+  const more = total - shown.length;
+
+  const privacyHint = !provider.cloud
+    ? t.settings.localHint
+    : provider.id === 'openrouter'
+      ? t.settings.cloudHintOpenRouter
+      : t.settings.cloudHintDirect(provider.label);
 
   return (
     <div className="provider-row">
@@ -446,17 +431,44 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
           <span className={provider.configured ? 'badge badge-verified' : 'badge badge-status'}>
             {provider.configured ? t.settings.keySaved : t.settings.keyMissing}
           </span>
-          {provider.error && <span className="badge badge-s-critical">{provider.error}</span>}
+          {/* Сирий текст помилки з main показуємо лише для налаштованого провайдера:
+              без ключа стан уже сказано бейджем, а англомовне «key is not configured» — шум. */}
+          {provider.configured && provider.error && (
+            <span className="badge badge-s-critical" title={provider.error}>
+              {provider.error}
+            </span>
+          )}
         </div>
-        <div className="xsmall dim mono truncate">
-          {provider.models.join(' · ') || t.settings.modelsUnknown}
+
+        <div className="xsmall dim provider-models">
+          {shown.length === 0
+            ? t.settings.modelsUnknown
+            : shown.map((m, i) => (
+                <span key={m.id} title={m.id}>
+                  {i > 0 ? ' · ' : ''}
+                  {m.label || m.id}
+                </span>
+              ))}
+          {more > 0 && <span className="nowrap"> · {t.settings.modelsMore(more)}</span>}
         </div>
+        <div className="xsmall dim">
+          {total > 0 && <>{t.settings.modelsCount(total)} · </>}
+          {provider.catalogueUpdatedAt ? (
+            <span title={formatDateTime(provider.catalogueUpdatedAt)}>
+              {t.settings.catalogueUpdated(formatRelative(provider.catalogueUpdatedAt))}
+            </span>
+          ) : (
+            t.settings.catalogueBuiltIn
+          )}
+        </div>
+
         <div className="row wrap">
           <input
             className="input"
             style={{ maxWidth: 300 }}
             type="password"
             autoComplete="off"
+            aria-label={`${provider.label}: ${t.settings.keyPlaceholder}`}
             placeholder={provider.configured ? t.settings.newKeyPlaceholder : t.settings.keyPlaceholder}
             value={key}
             onChange={(e) => setKey(e.target.value)}
@@ -487,7 +499,31 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
             </button>
           )}
         </div>
+
+        {(links.keys || links.credits || links.billing) && (
+          <div className="row wrap xsmall">
+            {links.keys && (
+              <a href={links.keys} target="_blank" rel="noreferrer noopener">
+                {t.settings.linkGetKey} ↗
+              </a>
+            )}
+            {links.credits && (
+              <a href={links.credits} target="_blank" rel="noreferrer noopener">
+                {t.settings.linkCredits} ↗
+              </a>
+            )}
+            {links.billing && (
+              <a href={links.billing} target="_blank" rel="noreferrer noopener">
+                {t.settings.linkBilling} ↗
+              </a>
+            )}
+          </div>
+        )}
+
         <span className="field-hint">{t.settings.keyHint}</span>
+        <span className="field-hint">{privacyHint}</span>
+
+        {provider.supportsBalance && provider.configured && <BalancePanel provider={provider} />}
       </div>
 
       <div className="col" style={{ gap: 'var(--sp-2)', alignItems: 'flex-end' }}>
@@ -509,6 +545,21 @@ function ProviderCard({ provider }: { provider: ProviderStatus }) {
             {test.data.ok ? t.settings.testOk : t.settings.testFail}
           </span>
         )}
+        <button
+          type="button"
+          className="btn"
+          title={t.settings.refreshModelsHint}
+          disabled={refresh.isPending}
+          onClick={() =>
+            refresh.mutate(provider.id, {
+              onSuccess: (status) =>
+                toast('info', t.settings.refreshModelsDone(status.label, status.modelInfo?.length ?? status.models.length)),
+              onError: (error) => toast('error', error.message),
+            })
+          }
+        >
+          {refresh.isPending ? t.settings.refreshingModels : t.settings.refreshModels}
+        </button>
       </div>
     </div>
   );

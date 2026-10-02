@@ -9,6 +9,8 @@ import type {
   ClauseReviewStatus,
   ClausesStatus,
   DocumentKind,
+  Effort,
+  ModelTier,
   Module,
   Obligation,
   RunStatus,
@@ -152,6 +154,21 @@ export const en = {
       judge: 'The bulk of a run’s cost: section × document.',
       critic: 'Re-checks compliant verdicts only. Can be skipped.',
     } satisfies Record<Stage, string>,
+
+    /** Глибина роздумів моделі. Значення в API лишаються кодами `low`…`max`. */
+    effort: {
+      low: 'low',
+      medium: 'medium',
+      high: 'high',
+      xhigh: 'extra high',
+      max: 'max',
+    } satisfies Record<Effort, string>,
+
+    modelTier: {
+      top: 'top tier',
+      balanced: 'balanced',
+      budget: 'budget',
+    } satisfies Record<ModelTier, string>,
   },
 
   /** `intlLocale` — регіональний тег для Intl; решта — одиниці, які Intl не дає. */
@@ -203,6 +220,8 @@ export const en = {
     costTitle: (input: string, cached: string, share: number, output: string) =>
       `Input: ${input} · from cache: ${cached} (${share}%) · output: ${output}`,
     cacheShare: (share: number) => `${share}% cache`,
+    inShort: 'in',
+    outShort: 'out',
   },
 
   heatmap: {
@@ -267,6 +286,7 @@ export const en = {
     fieldTitle: 'Title',
     fieldDocNumber: 'Document number',
     fieldOwner: 'Process owner',
+    ownerPlaceholder: 'e.g. Quality Manager',
     fieldKind: 'Type',
     kindUnset: 'not set',
     versionsCallout:
@@ -350,6 +370,7 @@ export const en = {
     colStarted: 'Started',
     colDuration: 'Duration',
     colCost: 'Cost',
+    costTitle: (input: string, output: string) => `${input} in / ${output} out`,
     runTitle: (runId: number) => `Run #${runId}`,
     preparing: 'preparing',
     running: 'running',
@@ -390,6 +411,19 @@ export const en = {
     estimateInput: 'Input tokens',
     estimateCost: 'Estimated cost',
     estimateCostSub: 'before prefix caching',
+    estimateModel: (model: string) => `Priced as ${model}`,
+    estimatePriceUnknown: 'price unknown',
+    estimatePriceUnknownSub: 'the catalogue has no price for this model',
+
+    modelOverrideTitle: 'Analysis model',
+    modelOverrideGroup: 'Which model analyses the documents in this run',
+    modelOverrideSettings: 'As in Settings',
+    modelOverrideCustom: 'Choose for this run',
+    modelOverrideCurrent: (judge: string, critic: string) => `Judgement: ${judge} · critic: ${critic}`,
+    modelOverrideDefault: 'built-in default',
+    modelOverrideProviderDefault: (provider: string) => `default model of ${provider}`,
+    modelOverrideHint:
+      'Applies to the judgement and the critic of this run only. Settings stay as they are.',
   },
 
   runDetail: {
@@ -468,6 +502,10 @@ export const en = {
     output: 'Output',
     cacheNote:
       'A zero cache share on repeat runs means something in the stable prompt prefix keeps changing (a timestamp, unsorted JSON).',
+    models: 'Models',
+    modelJudge: 'Judgement',
+    modelCritic: 'Critic',
+    noCritic: 'skipped',
   },
 
   clauseRegistry: {
@@ -619,6 +657,9 @@ export const en = {
     routingTitle: 'Model routing per stage',
     routingHint:
       'The expensive model belongs where a mistake costs the most: the clause registry and the judgement. Document profiles can go to a cheap one.',
+    routingReset: 'Reset to defaults',
+    routingResetTitle: 'Remove every per-stage choice and go back to the built-in routing',
+    routingResetDone: 'Routing reset to the built-in defaults',
     colStage: 'Stage',
     colProvider: 'Provider',
     colModel: 'Model',
@@ -626,7 +667,28 @@ export const en = {
     providerNone: 'none',
     providerCloud: ' (cloud)',
     providerLocal: ' (local)',
+    providerNoKey: ' — no key',
+    providerUnavailable: (id: string) => `${id} (unavailable)`,
     modelDefault: 'default',
+    modelCustom: 'Other model…',
+    modelCustomPlaceholder: 'vendor/model-id',
+    modelNotListed: (id: string) => `${id} (not in the list)`,
+    vendorOther: 'Other',
+    ariaProvider: (stage: string) => `${stage}: provider`,
+    ariaModel: (stage: string) => `${stage}: model`,
+    ariaCustomModel: (stage: string) => `${stage}: model ID`,
+    ariaEffort: (stage: string) => `${stage}: effort`,
+    effortUnset: 'Not set: the default of the stage applies.',
+    effortUnsupported: 'This model takes no effort setting.',
+    /** Збережений effort, якого обрана модель не приймає: видно, щоб його можна було скинути. */
+    effortStale: (effort: string) => `${effort} — not supported by this model`,
+    hintContext: (size: string) => `${size} context`,
+    hintPrice: (input: string, output: string) => `${input} in / ${output} out per 1M tokens`,
+    hintCacheRead: (price: string) => `cache read ${price}`,
+    hintPriceUnknown: 'price unknown',
+    hintNotInCatalogue: 'Not in the model catalogue — context and price unknown.',
+    hintDefault: 'The built-in default model of this stage.',
+    hintProviderDefault: (provider: string) => `The default model of ${provider}.`,
     executionTitle: 'Execution',
     fieldConcurrency: 'Concurrency',
     concurrencyHint:
@@ -646,6 +708,23 @@ export const en = {
     removeKey: 'Remove',
     keyHint:
       'The key is encrypted with safeStorage in the main process and is never returned to the interface.',
+    modelsCount: (count: number) => `${count} ${n(count, 'model', 'models')}`,
+    modelsMore: (count: number) => `+${count} more`,
+    catalogueUpdated: (when: string) => `list updated ${when}`,
+    catalogueBuiltIn: 'built-in list',
+    refreshModels: 'Refresh model list',
+    refreshingModels: 'Refreshing…',
+    refreshModelsHint: 'Fetches the provider’s live model catalogue. Costs no tokens.',
+    refreshModelsDone: (provider: string, count: number) =>
+      `${provider}: ${count} ${n(count, 'model', 'models')} in the list`,
+    linkGetKey: 'Create a key',
+    linkCredits: 'Credits',
+    linkBilling: 'Billing',
+    cloudHintOpenRouter:
+      'OpenRouter forwards the documents to the vendor of the chosen model (Anthropic, OpenAI, DeepSeek, Google…). The specification’s “Allow cloud providers” switch applies to it too.',
+    cloudHintDirect: (provider: string) =>
+      `The documents go to the ${provider} API. The specification’s “Allow cloud providers” switch applies.`,
+    localHint: 'Runs on this machine: the documents never leave it.',
     resultsLanguageTitle: 'Language of results',
     resultsLanguageLabel: 'Write conclusions in',
     resultsLanguageSpec: 'Language of the standard',
@@ -669,13 +748,83 @@ export const en = {
     spendColOutput: 'Output',
     spendColCost: 'Cost',
     spendBalanceNote:
-      'This is not an account balance: Anthropic has no endpoint for remaining credit. The actual balance is visible only in the Anthropic console.',
+      'These totals are the app’s own ledger of model calls, not an account balance. Anthropic has no endpoint for remaining credit, so its real balance is only in the Anthropic console. OpenRouter reports its figures itself: once its key is saved, they appear here separately.',
     spendOpenConsole: 'Open the Anthropic console',
+    spendOpenOpenRouter: 'Open OpenRouter credits',
+    spendCounted: 'Counted by this app',
+    spendReported: (provider: string) => `Reported by ${provider}`,
+    spendReportedHint:
+      'Spend of the API key saved in the app, as the provider reports it — including calls made with the same key outside this app.',
 
     testing: 'Testing…',
     test: 'Test',
     testOk: 'works',
     testFail: 'failed',
+  },
+
+  /** Баланс на боці провайдера (зараз — OpenRouter). Не плутати з власним обліком витрат. */
+  balance: {
+    chipKeyRemaining: (amount: string) => `${amount} left`,
+    chipKeyMonth: (amount: string) => `${amount} this month`,
+    chipKeyTotal: (amount: string) => `${amount} spent`,
+    tipAccount: (provider: string, when: string) =>
+      `${provider}: credit left on the account. Updated ${when}.`,
+    tipKeyRemaining: (provider: string, when: string) =>
+      `${provider}: what is left of this API key’s limit — not the account balance (that needs a management key in Settings). Updated ${when}.`,
+    tipKeyMonth: (provider: string, when: string) =>
+      `${provider}: spent by this API key this month — not the account balance (that needs a management key in Settings). Updated ${when}.`,
+    tipKeyTotal: (provider: string, when: string) =>
+      `${provider}: spent by this API key in total — not the account balance. Updated ${when}.`,
+    tipLow: 'Credit is running low.',
+    tipOpenSettings: 'Click to open Settings.',
+    tipUnavailable: (provider: string) => `${provider}: the balance is unavailable right now.`,
+    tipFailed: (provider: string, message: string) =>
+      `${provider}: could not fetch the balance — ${message}`,
+
+    panelTitle: (provider: string) => `Balance reported by ${provider}`,
+    refresh: 'Refresh',
+    refreshing: 'Refreshing…',
+    fetchedAt: (when: string) => `updated ${when}`,
+    accountTitle: 'Account',
+    accountRemaining: 'Credit left',
+    accountTotal: 'Credits purchased',
+    accountUsed: 'Used',
+    keyTitle: 'This API key',
+    keyToday: 'Today',
+    keyWeek: 'This week',
+    keyMonth: 'This month',
+    keyTotal: 'All time',
+    keyLimit: 'Limit',
+    keyNoLimit: 'no limit',
+    keyLimitLeft: 'Left of the limit',
+    limitReset: (period: string | null) =>
+      period === 'daily'
+        ? 'resets daily'
+        : period === 'weekly'
+          ? 'resets weekly'
+          : period === 'monthly'
+            ? 'resets monthly'
+            : period
+              ? `resets: ${period}`
+              : 'never resets',
+    freeTier: 'free tier',
+    accountNeedsKey:
+      'The account balance is only available with a management key. Without it the app sees what this API key has spent, not how much credit is left.',
+    accountKeyRejected: (provider: string) =>
+      `${provider} rejected the management key. Create a new one and save it here.`,
+    accountError: 'Could not fetch the account balance. Try again later.',
+    unavailable: 'The provider returned no balance — check the key and the connection.',
+    managementKeyLabel: 'Management key (optional)',
+    managementKeyPlaceholder: 'management key',
+    managementKeyNewPlaceholder: 'new management key (never shown)',
+    managementKeySaved: 'management key saved',
+    managementKeySave: 'Save',
+    managementKeyRemove: 'Remove',
+    managementKeySavedToast: 'Management key saved',
+    managementKeyHint:
+      'A management key can create, change and delete your API keys. The app uses it for one thing only — reading the account balance. It is encrypted like the API key and never shown again.',
+    managementKeyCreate: 'Create a management key',
+    openCredits: (provider: string) => `Credits on ${provider}`,
   },
 
   pdf: {

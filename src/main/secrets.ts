@@ -26,6 +26,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { LocalizedError } from './i18n';
 import { storageRoot } from './paths';
 
 const FILE_NAME = 'secrets.json';
@@ -37,14 +38,15 @@ interface SecretsFile {
   keys: Record<string, string>;
 }
 
-/** Системне шифрування недоступне — зберігати ключ нема куди. */
-export class EncryptionUnavailableError extends Error {
+/**
+ * Системне шифрування недоступне — зберігати ключ нема куди.
+ *
+ * Сховище не знає мови інтерфейсу, тож текст для людини будує межа IPC
+ * (`toIpcError`) потрібною мовою; `message` — англійською, для логів.
+ */
+export class EncryptionUnavailableError extends LocalizedError {
   constructor() {
-    super(
-      'Системне сховище паролів недоступне (safeStorage). ' +
-        'Ключ API не збережено — інакше він лежав би на диску відкритим текстом. ' +
-        'На Linux потрібен gnome-keyring або kwallet; на Windows і macOS перевірте профіль користувача.',
-    );
+    super((m) => m.secrets.encryptionUnavailable);
     this.name = 'EncryptionUnavailableError';
   }
 }
@@ -200,7 +202,7 @@ export class SafeStorageSecrets implements SecretsStore {
 
 function normalizeId(providerId: string): string {
   const id = providerId.trim().toLowerCase();
-  if (id.length === 0) throw new Error('providerId не може бути порожнім');
+  if (id.length === 0) throw new LocalizedError((m) => m.providers.idMissing);
   return id;
 }
 

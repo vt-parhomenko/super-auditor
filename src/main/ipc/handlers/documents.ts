@@ -33,13 +33,13 @@ export function documentHandlers(ctx: IpcContext): DocumentHandlers {
 
     'documents:update': (documentId, patch) => {
       const updated = db.documents.update(requireId(documentId, 'documentId'), patch);
-      if (!updated) throw notFound('Документ', documentId);
+      if (!updated) throw notFound('document', documentId);
       events.emit('library:changed', { kind: 'documents' });
     },
 
     'documents:delete': (documentId) => {
       const document = db.documents.get(requireId(documentId, 'documentId'));
-      if (!document) throw notFound('Документ', documentId);
+      if (!document) throw notFound('document', documentId);
 
       // Версію, яку вже судили, БД не віддасть видалити (FOREIGN KEY на
       // audit_run_document). Кажемо це людською мовою, а не «constraint failed».
@@ -48,10 +48,9 @@ export function documentHandlers(ctx: IpcContext): DocumentHandlers {
         .list()
         .filter((run) => run.documentVersionIds.some((id) => versionIds.has(id)));
       if (blocking.length > 0) {
-        throw validation(
-          `Документ використано у прогонах (${blocking.length}) — спочатку видаліть їх`,
-          { runIds: blocking.map((run) => run.id) },
-        );
+        throw validation((m) => m.documents.usedInRuns(blocking.length), {
+          runIds: blocking.map((run) => run.id),
+        });
       }
 
       // Блоби лишаються на диску: їх може ділити інший документ (content-addressed

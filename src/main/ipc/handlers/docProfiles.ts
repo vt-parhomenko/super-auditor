@@ -19,9 +19,7 @@ export function docProfileHandlers(ctx: IpcContext): DocProfileHandlers {
     'docProfiles:build': async (documentVersionId) => {
       const version = requireDocumentVersion(db, documentVersionId);
       if (version.extractionId === null) {
-        throw validation('У версії документа немає екстракції тексту — профіль будувати нема з чого', {
-          documentVersionId,
-        });
+        throw validation((m) => m.docProfiles.noExtraction, { documentVersionId });
       }
       return requireOrchestrator().buildDocProfile(documentVersionId);
     },

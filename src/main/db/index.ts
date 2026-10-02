@@ -160,11 +160,14 @@ export {
   RunTasksRepo,
   RunsRepo,
   emptySeverityCounts,
+  parseRunRouting,
   type RunInput,
+  type RunLaunchSettings,
+  type RunRouting,
   type RunTaskInput,
   type TaskCounts,
 } from './repos/runs';
-export { DEFAULT_SETTINGS, SettingsRepo } from './repos/settings';
+export { DEFAULT_SETTINGS, SettingsRepo, isResultsLanguage } from './repos/settings';
 export {
   SiteProfilesRepo,
   type ApplicabilityCounts,

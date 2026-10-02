@@ -753,12 +753,66 @@
 
 /* ── Налаштування ────────────────────────────────────────────────────────── */
 .settings-grid { display: grid; gap: var(--sp-4); max-width: 940px; }
+/* Рядок етапу: назва · провайдер · модель (+ поле власного id) · глибина; під ним — довідка. */
 .routing-row {
   display: grid;
-  grid-template-columns: 170px minmax(0, 1fr) minmax(0, 1fr) 120px;
-  gap: var(--sp-2);
-  align-items: center;
+  grid-template-columns: 170px minmax(0, 0.8fr) minmax(0, 1.4fr) 120px;
+  gap: 4px var(--sp-2);
+  align-items: start;
 }
+.routing-row + .routing-row:not(.routing-head) { padding-top: var(--sp-2); border-top: 1px solid var(--border-subtle); }
+.routing-head {
+  font-weight: 700;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.routing-stage {
+  display: flex;
+  align-items: center;
+  min-height: var(--row-h);
+  font-weight: 600;
+}
+.routing-hint { grid-column: 2 / -1; min-width: 0; }
+.model-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.model-hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-hint .mono { color: var(--text-2); }
+
+/* Перевизначення моделі в діалозі нового прогону. */
+.model-override {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.model-override-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.4fr) 120px;
+  gap: var(--sp-2);
+  align-items: start;
+}
+.estimate-model {
+  grid-column: 1 / -1;
+  padding-top: var(--sp-2);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-models { line-height: 1.6; }
 .provider-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -770,6 +824,8 @@
   background: var(--surface-2);
 }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+/* У картці-колонці flex розтягнув би перемикач на всю ширину з порожнім хвостом. */
+.card > .seg { align-self: flex-start; }
 .seg button {
   border: 0;
   background: var(--surface);
@@ -936,6 +992,85 @@
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }
+
+/* ── Баланс провайдера ───────────────────────────────────────────────────── */
+/* Рівні спільні для шапки, панелі й витрат: жовтий < $5, червоний < $1. */
+.level-low { color: var(--warn); }
+.level-critical { color: var(--danger); }
+
+.balance-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.balance-chip:hover { border-color: var(--border-strong); text-decoration: none; }
+.balance-chip-value {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.balance-chip.level-low {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.balance-chip.level-low .balance-chip-value { color: var(--warn); }
+.balance-chip.level-critical {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+.balance-chip.level-critical .balance-chip-value { color: var(--danger); }
+/* Помилка чи «немає даних» — лише тихий прочерк, пояснення в підказці. */
+.balance-chip.is-unavailable { background: transparent; border-color: transparent; color: var(--text-3); }
+.balance-chip.is-unavailable:hover { border-color: var(--border); }
+
+.balance-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-1);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.balance-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: var(--sp-2);
+}
+.balance-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px var(--sp-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.balance-figure-label {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.balance-figure-value {
+  font-family: var(--font-mono);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.balance-link { align-self: flex-start; }
 
 /* ── Видалення прогону ───────────────────────────────────────────────────── */
 .delete-facts {

@@ -21,6 +21,10 @@ import type {
   HumanReviewDto,
   ImportRequest,
   ImportResult,
+  IsoDate,
+  Language,
+  ModelInfo,
+  ResultsLanguage,
   RunConfig,
   RunProgress,
   RunSummary,
@@ -104,8 +108,11 @@ export interface IpcApi {
   // — Прогони
   'runs:list': () => Promise<AuditRunDto[]>;
   'runs:get': (runId: number) => Promise<AuditRunDto | null>;
-  /** Оцінка вартості до старту (через count_tokens). */
-  'runs:estimate': (config: RunConfig) => Promise<{ tasks: number; inputTokens: number; costUsd: number }>;
+  /**
+   * Груба оцінка до старту за цінами моделі судження з маршрутизації.
+   * `costUsd: null` — ціна моделі невідома (напр. локальна або не з каталогу).
+   */
+  'runs:estimate': (config: RunConfig) => Promise<RunEstimateDto>;
   'runs:start': (config: RunConfig) => Promise<number>;
   'runs:pause': (runId: number) => Promise<void>;
   'runs:resume': (runId: number) => Promise<void>;
@@ -138,6 +145,23 @@ export interface IpcApi {
   'providers:setApiKey': (providerId: string, apiKey: string) => Promise<void>;
   'providers:clearApiKey': (providerId: string) => Promise<void>;
   'providers:test': (providerId: string) => Promise<{ ok: boolean; message: string }>;
+  /**
+   * Оновлює список моделей провайдера з живого каталогу (OpenRouter — публічний
+   * `/models`, Anthropic — `/v1/models`). Токенів не витрачає. Повертає свіжий статус.
+   */
+  'providers:refreshModels': (providerId: string) => Promise<ProviderStatus>;
+  /**
+   * Баланс і витрати на боці провайдера, якщо він їх віддає (зараз — OpenRouter).
+   * Токенів не витрачає. `null` — провайдер цього не підтримує або ключа немає.
+   */
+  'providers:balance': (providerId: string) => Promise<ProviderBalance | null>;
+  /**
+   * Додатковий management-ключ (OpenRouter). Потрібен ЛИШЕ для залишку на рахунку
+   * (`GET /credits`); для викликів моделей не використовується. Шифрується так
+   * само, як основний ключ, і в renderer не повертається ніколи.
+   */
+  'providers:setManagementKey': (providerId: string, key: string) => Promise<void>;
+  'providers:clearManagementKey': (providerId: string) => Promise<void>;
 
   // — Витрати
   /**
@@ -161,13 +185,19 @@ export interface AppSettings {
   localOnly: boolean;
   theme: 'system' | 'light' | 'dark';
   /**
-   * Мова, якою модель пише висновки, «чого бракує» та рекомендації.
-   * Код BCP-47 (`uk`, `en`, `nl`) або порожньо — мовою стандарту.
+   * Мова, якою модель пише висновки, «чого бракує» та рекомендації, а також
+   * службові позначки в результатах і експорт. `''` — мовою стандарту.
    *
    * УВАГА: цитати-докази завжди лишаються мовою оригіналу. Переклад цитати
    * зламав би механічну перевірку, і всі вердикти впали б у `needs_human_review`.
    */
-  resultsLanguage: string;
+  resultsLanguage: ResultsLanguage;
+  /**
+   * Розв'язана мова інтерфейсу. Джерело правди — renderer (преференція в
+   * localStorage, `system` → мова ОС); він синхронізує сюди фактичну мову,
+   * щоб main писав тости й помилки тією ж мовою.
+   */
+  uiLanguage: Language;
 }
 
 export interface ProviderStatus {
@@ -176,8 +206,58 @@ export interface ProviderStatus {
   configured: boolean;
   /** Хмарний провайдер підпадає під обмеження cloudAllowed (ADR-8). */
   cloud: boolean;
+  /** Ідентифікатори моделей — те саме, що `modelInfo[].id`. */
   models: string[];
+  /** Опис моделей: курований список першим, далі решта каталогу. */
+  modelInfo: ModelInfo[];
+  /** true → у маршрутизації можна ввести довільний id моделі (OpenRouter). */
+  allowCustomModel: boolean;
+  /** Коли востаннє оновлено живий каталог; null — лише вбудований список. */
+  catalogueUpdatedAt: IsoDate | null;
+  /** Провайдер віддає баланс/витрати через `providers:balance`. */
+  supportsBalance?: boolean;
+  /** Збережено management-ключ (OpenRouter) — доступний залишок на рахунку. */
+  managementKeyConfigured?: boolean;
   error: string | null;
+}
+
+/**
+ * Баланс провайдера. Усі суми — USD; `null` — значення недоступне.
+ *
+ * Два різні рівні, і плутати їх не можна:
+ *  - РАХУНОК (`account*`) — скільки грошей лишилось на акаунті. OpenRouter віддає
+ *    це лише з management-ключем;
+ *  - КЛЮЧ (`key*`) — скільки витратив саме цей API-ключ і скільки лишилось
+ *    до його ліміту (якщо ліміт задано). Доступно зі звичайним ключем.
+ */
+export interface ProviderBalance {
+  providerId: string;
+  /** total_credits − total_usage. */
+  accountRemainingUsd: number | null;
+  accountTotalCreditsUsd: number | null;
+  accountTotalUsageUsd: number | null;
+  /** Чому залишку рахунку немає. */
+  accountUnavailableReason: 'management_key_required' | 'management_key_rejected' | 'error' | null;
+  /** Ліміт ключа; null — ліміту немає. */
+  keyLimitUsd: number | null;
+  keyLimitRemainingUsd: number | null;
+  /** 'daily' | 'weekly' | 'monthly' або null — ліміт не скидається. */
+  keyLimitReset: string | null;
+  keyUsageUsd: number | null;
+  keyUsageDailyUsd: number | null;
+  keyUsageWeeklyUsd: number | null;
+  keyUsageMonthlyUsd: number | null;
+  isFreeTier: boolean | null;
+  fetchedAt: IsoDate;
+}
+
+export interface RunEstimateDto {
+  tasks: number;
+  inputTokens: number;
+  /** null — ціна моделі судження невідома. */
+  costUsd: number | null;
+  /** Модель судження, за цінами якої рахували. */
+  model: string | null;
 }
 
 // ─── Події main → renderer ───────────────────────────────────────────────────
@@ -275,6 +355,10 @@ export const IPC_CHANNELS: readonly IpcChannel[] = [
   'providers:setApiKey',
   'providers:clearApiKey',
   'providers:test',
+  'providers:refreshModels',
+  'providers:balance',
+  'providers:setManagementKey',
+  'providers:clearManagementKey',
   'export:run',
 ] as const;
 

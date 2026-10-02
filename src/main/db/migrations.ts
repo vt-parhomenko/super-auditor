@@ -72,6 +72,25 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    name: 'run-launch-settings',
+    up(db) {
+      // Прогін, розпочатий на моделі X, після зміни налаштувань тихо продовжувався
+      // б на моделі Y — і половина findings прийшла б від іншої моделі, ніж записано
+      // в `model_judge`. Тому маршрутизацію фіксуємо на старті, а resume бере її звідси.
+      // Те саме з мовою висновків: один прогін — одна мова.
+      //
+      //   routing          JSON {"judge": ModelRef, "critic": ModelRef | null}
+      //   results_language '' | 'en' | 'nl' | 'uk'
+      //
+      // NULL — прогін зі старої версії: resume бере поточні налаштування, як і раніше.
+      db.exec(`
+        ALTER TABLE audit_run ADD COLUMN routing TEXT;
+        ALTER TABLE audit_run ADD COLUMN results_language TEXT;
+      `);
+    },
+  },
 ];
 
 export const LATEST_VERSION: number = MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0);

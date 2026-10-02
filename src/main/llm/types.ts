@@ -8,7 +8,9 @@
  */
 
 import type { ZodType } from 'zod';
-import type { EvidenceSource, Stage } from '@shared/domain';
+import type { Effort as SharedEffort, EvidenceSource, IsoDate, ModelInfo, Stage } from '@shared/domain';
+import type { ProviderBalance } from '@shared/ipc';
+import type { ModelPricing } from './cost';
 
 // ─── Можливості провайдера ───────────────────────────────────────────────────
 
@@ -27,8 +29,8 @@ export interface ProviderCaps {
   cloud: boolean;
 }
 
-/** Глибина роздумів. Передається в `output_config.effort`, НЕ top-level. */
-export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+/** Глибина роздумів. Для Anthropic — `output_config.effort`, НЕ top-level. */
+export type Effort = SharedEffort;
 
 // ─── Запит ───────────────────────────────────────────────────────────────────
 
@@ -158,7 +160,42 @@ export interface LlmProvider {
   readonly models: readonly string[];
   /** Чи є ключ / доступний ендпоінт. Мережу не чіпає. */
   isConfigured(): boolean;
+  /**
+   * Ціни конкретної моделі цього провайдера. null — ціна невідома.
+   * Обгортки (кеш, журнал витрат, привʼязка моделі) мають пробрасувати метод.
+   */
+  pricingFor?(model: string): ModelPricing | null;
   complete<T>(req: CompleteRequest<T>, signal: AbortSignal): Promise<CompleteResult<T>>;
+
+  // ─── Каталог моделей (необовʼязково; обгортки це НЕ пробрасують) ─────────
+
+  /** Модель, якою провайдер працює, коли маршрутизація не задала свою. */
+  readonly defaultModel?: string;
+  /** Опис моделей для вибору в Налаштуваннях. Мережу не чіпає. */
+  listModelInfo?(): ModelInfo[];
+  /** true → у маршрутизації можна вписати довільний id моделі. */
+  readonly allowCustomModel?: boolean;
+  /** Коли востаннє оновлено живий каталог; null — лише вбудований список. */
+  catalogueUpdatedAt?(): IsoDate | null;
+  /** Оновлює каталог із мережі. Токенів не витрачає. */
+  refreshModels?(signal?: AbortSignal): Promise<void>;
+  /**
+   * Фонове оновлення застарілого каталогу. Ніколи не блокує і не кидає;
+   * без дозволу на мережу нічого не робить.
+   */
+  refreshModelsInBackground?(): void;
+
+  // ─── Баланс (необовʼязково) ──────────────────────────────────────────────
+
+  /** Провайдер уміє віддати баланс/витрати (`balance()`). */
+  readonly supportsBalance?: boolean;
+  /**
+   * Ідентифікатор у сховищі ключів для додаткового management-ключа
+   * (OpenRouter: `openrouter:management`). Для викликів моделей не вживається.
+   */
+  readonly managementKeyId?: string;
+  managementKeyConfigured?(): boolean;
+  balance?(signal?: AbortSignal): Promise<ProviderBalance | null>;
 }
 
 // ─── Кеш ─────────────────────────────────────────────────────────────────────

@@ -91,8 +91,10 @@ describe('registerIpcHandlers', () => {
     // 49 базових + `blob:read` для вбудованого PDF-вьювера.
     expect(registered).toHaveLength(IPC_CHANNELS.length);
     // 49 базових + `blob:read` (PDF-вьювер) + `documents:runs`, `usage:spend`,
-    // `usage:recent` (прогони в розрізі файлу та облік витрат) + `runs:delete`.
-    expect(IPC_CHANNELS).toHaveLength(54);
+    // `usage:recent` (прогони в розрізі файлу та облік витрат) + `runs:delete`
+    // + `providers:refreshModels`, `providers:balance`, `providers:setManagementKey`,
+    // `providers:clearManagementKey` (живі каталоги й баланс OpenRouter).
+    expect(IPC_CHANNELS).toHaveLength(58);
 
     ipc.dispose();
   });
@@ -148,10 +150,33 @@ describe('серіалізація помилок на межі IPC', () => {
     )) as Error | null;
 
     expect(failure).toBeInstanceOf(Error);
-    expect(failure?.message).toBe('[NOT_FOUND] Документ 999999 не знайдено');
-    expect(failure?.stack).toBe('Error: [NOT_FOUND] Документ 999999 не знайдено');
+    expect(failure?.message).toBe('[NOT_FOUND] Document 999999 not found');
+    expect(failure?.stack).toBe('Error: [NOT_FOUND] Document 999999 not found');
     expect(failure?.name).toBe('Error');
 
     ipc.dispose();
+  });
+
+  it('текст помилки — мовою інтерфейсу з налаштувань', async () => {
+    const ipc = install();
+    db.settings.set({ uiLanguage: 'uk' });
+
+    try {
+      const failure = (await invoke('documents:update', 999_999, { title: 'нема такого' }).then(
+        () => null,
+        (err: unknown) => err,
+      )) as Error | null;
+      expect(failure?.message).toBe('[NOT_FOUND] Документ 999999 не знайдено');
+
+      db.settings.set({ uiLanguage: 'nl' });
+      const dutch = (await invoke('documents:update', 999_999, {}).then(
+        () => null,
+        (err: unknown) => err,
+      )) as Error | null;
+      expect(dutch?.message).toBe('[NOT_FOUND] Document 999999 niet gevonden');
+    } finally {
+      db.settings.set({ uiLanguage: 'en' });
+      ipc.dispose();
+    }
   });
 });

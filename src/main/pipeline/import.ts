@@ -1,10 +1,12 @@
 import type { Db } from '@main/db';
+import { errorText, mainMessages, uiLanguageOf } from '@main/i18n';
 import { extractText, putFile, type BlobDescriptor, type ExtractionResult } from '@main/ingest';
 import type {
   ExtractionDto,
   ImportRequest,
   ImportResult,
   ImportedItem,
+  Language,
   SpecVersionDto,
   DocumentVersionDto,
 } from '@shared/domain';
@@ -39,17 +41,29 @@ export async function importFiles(
 ): Promise<ImportResult> {
   const imported: ImportedItem[] = [];
   const failed: ImportResult['failed'] = [];
+  const language = uiLanguageOf(db);
 
   for (const [index, path] of request.paths.entries()) {
     try {
       imported.push(await importOne(db, path, request.target, options));
     } catch (error) {
-      failed.push({ path, error: error instanceof Error ? error.message : String(error) });
+      failed.push({ path, error: importErrorText(language, error) });
     }
     options.onProgress?.(index + 1, request.paths.length, path);
   }
 
   return { imported, failed };
+}
+
+/**
+ * Причина невдачі для екрана імпорту — мовою інтерфейсу. Шар ingest мови не
+ * знає: його помилки несуть лише те, ЩО сталося.
+ */
+function importErrorText(language: Language, error: unknown): string {
+  if ((error as NodeJS.ErrnoException | null)?.code === 'ENOENT') {
+    return mainMessages(language).importing.fileNotFound;
+  }
+  return errorText(language, error);
 }
 
 async function importOne(

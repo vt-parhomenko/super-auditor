@@ -11,22 +11,38 @@ const usage = (over: Partial<LlmUsage> = {}): LlmUsage => ({
 });
 
 describe('MODEL_PRICING', () => {
-  it('має рівно три моделі з дослівними ID', () => {
+  it('ID дослівні, без суфіксів із датами', () => {
     expect(Object.keys(MODEL_PRICING).sort()).toEqual([
+      'claude-fable-5-1',
       'claude-haiku-4-5',
       'claude-opus-5',
+      'claude-opus-5-5',
       'claude-sonnet-5',
+      'claude-sonnet-5-5',
     ]);
   });
 
-  it('кешоване читання ~10%, запис ~125% від вхідного', () => {
-    for (const [, price] of Object.entries(MODEL_PRICING)) {
-      expect(price.cacheReadPerMTok).toBeCloseTo(price.inputPerMTok * 0.1, 10);
-      expect(price.cacheWritePerMTok).toBeCloseTo(price.inputPerMTok * 1.25, 10);
-    }
+  it('ціни кешу задані явно — правило «10% / 125%» не тримається на Opus 5.5 і Fable 5.1', () => {
+    expect(getPricing('claude-opus-5-5')).toMatchObject({
+      inputPerMTok: 4,
+      outputPerMTok: 20,
+      cacheReadPerMTok: 0.2,
+      cacheWritePerMTok: 5,
+    });
+    expect(getPricing('claude-fable-5-1')).toMatchObject({
+      inputPerMTok: 10,
+      outputPerMTok: 50,
+      cacheReadPerMTok: 0.25,
+      cacheWritePerMTok: 12.5,
+    });
+    expect(getPricing('claude-opus-5')).toMatchObject({ cacheReadPerMTok: 0.5, cacheWritePerMTok: 6.25 });
+    expect(getPricing('claude-sonnet-5')).toMatchObject({ cacheReadPerMTok: 0.2, cacheWritePerMTok: 2.5 });
+    expect(getPricing('claude-haiku-4-5')).toMatchObject({ cacheReadPerMTok: 0.1, cacheWritePerMTok: 1.25 });
   });
 
   it('контекстні вікна відповідають документації', () => {
+    expect(getPricing('claude-opus-5-5')?.contextWindow).toBe(1_000_000);
+    expect(getPricing('claude-fable-5-1')?.contextWindow).toBe(1_000_000);
     expect(getPricing('claude-opus-5')?.contextWindow).toBe(1_000_000);
     expect(getPricing('claude-sonnet-5')?.contextWindow).toBe(1_000_000);
     expect(getPricing('claude-haiku-4-5')?.contextWindow).toBe(200_000);
@@ -46,12 +62,29 @@ describe('estimateCost', () => {
     expect(estimateCost('claude-haiku-4-5', usage({ input: 1_000_000, output: 1_000_000 }))).toBeCloseTo(6, 9);
   });
 
-  it('кешоване читання коштує 10% від вхідного на кожній моделі', () => {
+  it('кешоване читання на Opus 5 / Sonnet 5 / Haiku 4.5 коштує 10% від вхідного', () => {
     for (const model of ['claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'] as const) {
       const plain = estimateCost(model, usage({ input: 1_000_000 }));
       const cached = estimateCost(model, usage({ cachedInput: 1_000_000 }));
       expect(cached).toBeCloseTo(plain * 0.1, 9);
     }
+  });
+
+  it('Opus 5.5: 1M вхідних + 1M вихідних = $24, читання кешу — $0.20, запис — $5', () => {
+    expect(estimateCost('claude-opus-5-5', usage({ input: 1_000_000, output: 1_000_000 }))).toBeCloseTo(24, 9);
+    expect(estimateCost('claude-opus-5-5', usage({ cachedInput: 1_000_000 }))).toBeCloseTo(0.2, 9);
+    expect(estimateCost('claude-opus-5-5', usage({ cacheWrite: 1_000_000 }))).toBeCloseTo(5, 9);
+  });
+
+  it('Fable 5.1: читання кешу $0.25 (2.5% від входу), запис $12.50', () => {
+    expect(estimateCost('claude-fable-5-1', usage({ cachedInput: 1_000_000 }))).toBeCloseTo(0.25, 9);
+    expect(estimateCost('claude-fable-5-1', usage({ cacheWrite: 1_000_000 }))).toBeCloseTo(12.5, 9);
+  });
+
+  it('явні ціни провайдера мають пріоритет; null — «ціна невідома», а не таблиця Anthropic', () => {
+    const custom = { inputPerMTok: 1, outputPerMTok: 2, cacheReadPerMTok: 0.5, cacheWritePerMTok: 1, contextWindow: 1 };
+    expect(estimateCost('claude-opus-5', usage({ input: 1_000_000, output: 1_000_000 }), custom)).toBeCloseTo(3, 9);
+    expect(estimateCost('claude-opus-5', usage({ input: 1_000_000 }), null)).toBe(0);
   });
 
   it('запис у кеш дорожчий за звичайний вхід', () => {
@@ -80,6 +113,13 @@ describe('estimateCostForTokens', () => {
       cachedShare: 1,
     });
     expect(cached).toBeCloseTo(full * 0.1, 9);
+  });
+
+  it('приймає ціни з provider.pricingFor()', () => {
+    const pricing = { inputPerMTok: 2, outputPerMTok: 10, cacheReadPerMTok: 0.2, cacheWritePerMTok: 2.5, contextWindow: 1 };
+    expect(
+      estimateCostForTokens('anthropic/claude-sonnet-5', { inputTokens: 1_000_000, outputTokens: 1_000_000 }, pricing),
+    ).toBeCloseTo(12, 9);
   });
 });
 

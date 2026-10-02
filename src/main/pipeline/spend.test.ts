@@ -122,6 +122,25 @@ describe('журнал витрат', () => {
     expect(summary.month).toBeCloseTo(2);
   });
 
+  it('пробрасує ціни провайдера — інакше оцінка вартості вважала б їх невідомими', () => {
+    const pricing = {
+      inputPerMTok: 1,
+      outputPerMTok: 2,
+      cacheReadPerMTok: 0.1,
+      cacheWritePerMTok: 1.25,
+      contextWindow: 128_000,
+    };
+    const priced = withSpendLedger(
+      { ...provider(), pricingFor: (model: string) => (model === 'claude-opus-5' ? pricing : null) },
+      db,
+    );
+    expect(priced.pricingFor?.('claude-opus-5')).toBe(pricing);
+    expect(priced.pricingFor?.('other')).toBeNull();
+
+    // Провайдер без власних цін — і обгортка без методу: «невідомо» вирішує викликач.
+    expect(withSpendLedger(provider(), db).pricingFor).toBeUndefined();
+  });
+
   it('порожній журнал дає нулі, а не помилку', () => {
     expect(db.spend.summary()).toMatchObject({ today: 0, month: 0, total: 0, byStage: [] });
   });
@@ -137,14 +156,20 @@ describe('мова результатів', () => {
   it('перекладає код мови в назву, зрозумілу моделі', () => {
     expect(languageInstruction('uk')).toContain('Ukrainian');
     expect(languageInstruction('nl')).toContain('Dutch');
-    // Невідомий код передається як є, а не мовчки ігнорується.
-    expect(languageInstruction('sv')).toContain('sv');
+    expect(languageInstruction('en')).toContain('English');
+  });
+
+  it('приймає лише мови застосунку — решта означає «мовою стандарту»', () => {
+    // Сирий код у промпті був би неперевіреним вводом; налаштування й так
+    // не пропускають нічого, крім en / nl / uk.
+    expect(languageInstruction('sv')).toBeNull();
+    expect(languageInstruction('uk-UA')).toBeNull();
   });
 
   it('ЗАВЖДИ забороняє переклад цитат', () => {
     // Це головна властивість: перекладена цитата не знайдеться в документі,
     // і кожен `compliant` буде понижено до `needs_human_review`.
-    for (const code of ['uk', 'en', 'de']) {
+    for (const code of ['uk', 'en', 'nl']) {
       const text = languageInstruction(code)!;
       expect(text).toContain('EXACTLY');
       expect(text).toContain('never translate');

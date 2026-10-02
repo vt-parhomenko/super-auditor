@@ -147,7 +147,15 @@ describe('бібліотека документів', () => {
       invoke('documents:delete', fixture.damagedDocId),
       'VALIDATION',
     );
-    expect(message).toContain('використано у прогонах');
+    expect(message).toContain('is used in 1 run');
+
+    // Та сама відмова мовою інтерфейсу, яку renderer синхронізував у налаштування.
+    await invoke('settings:set', { uiLanguage: 'uk' });
+    const ukrainian = await expectCode(
+      invoke('documents:delete', fixture.damagedDocId),
+      'VALIDATION',
+    );
+    expect(ukrainian).toContain('використано у прогонах');
   });
 
   it('NOT_FOUND для неіснуючого id', async () => {
@@ -227,8 +235,16 @@ describe('реєстр вимог', () => {
       invoke('clauses:markReviewed', fixture.specVersionId),
       'VALIDATION',
     );
-    expect(message).toContain('1 без підтвердження');
-    expect(message).toContain('1 позначено прапорцем');
+    expect(message).toContain('1 unconfirmed');
+    expect(message).toContain('1 flagged');
+
+    await invoke('settings:set', { uiLanguage: 'uk' });
+    const ukrainian = await expectCode(
+      invoke('clauses:markReviewed', fixture.specVersionId),
+      'VALIDATION',
+    );
+    expect(ukrainian).toContain('1 без підтвердження');
+    expect(ukrainian).toContain('1 позначено прапорцем');
   });
 });
 
@@ -247,6 +263,20 @@ describe('import:pick', () => {
     expect(await invoke('import:pick', 'specification')).toEqual([]);
 
     await expectCode(invoke('import:pick', 'нісенітниця'), 'VALIDATION');
+  });
+
+  it('системний діалог говорить мовою інтерфейсу', async () => {
+    electron.dialogResult = { canceled: true, filePaths: [] };
+
+    await invoke('import:pick', 'document');
+    expect((electron.lastDialogOptions as Electron.OpenDialogOptions).title).toBe('Import documents');
+
+    await invoke('settings:set', { uiLanguage: 'nl' });
+    await invoke('import:pick', 'specification');
+    const options = electron.lastDialogOptions as Electron.OpenDialogOptions;
+    expect(options.title).toBe('Norm importeren');
+    expect(options.buttonLabel).toBe('Importeren');
+    expect(options.filters?.[0]?.name).toBe('Documenten (PDF, DOCX)');
   });
 });
 
@@ -472,6 +502,29 @@ describe('налаштування', () => {
     await expectCode(invoke('settings:set', { theme: 'neon' }), 'VALIDATION');
     await expectCode(invoke('settings:set', null), 'VALIDATION');
   });
+
+  it('мова результатів і мова інтерфейсу зберігаються', async () => {
+    expect(await invoke('settings:get')).toMatchObject({ resultsLanguage: '', uiLanguage: 'en' });
+
+    await invoke('settings:set', { resultsLanguage: 'nl', uiLanguage: 'uk' });
+    expect(await invoke('settings:get')).toMatchObject({ resultsLanguage: 'nl', uiLanguage: 'uk' });
+
+    // `''` — мовою стандарту — валідне значення, а не «порожній патч».
+    await invoke('settings:set', { resultsLanguage: '' });
+    expect(await invoke('settings:get')).toMatchObject({ resultsLanguage: '', uiLanguage: 'uk' });
+  });
+
+  it('невідома мова — VALIDATION із поясненням, нічого не зберігається', async () => {
+    const results = await expectCode(invoke('settings:set', { resultsLanguage: 'de' }), 'VALIDATION');
+    expect(results).toContain('"de"');
+    expect(results).toContain('en, nl, uk');
+
+    const ui = await expectCode(invoke('settings:set', { uiLanguage: 'uk-UA' }), 'VALIDATION');
+    expect(ui).toContain('interface language');
+
+    await expectCode(invoke('settings:set', { uiLanguage: '' }), 'VALIDATION');
+    expect(await invoke('settings:get')).toMatchObject({ resultsLanguage: '', uiLanguage: 'en' });
+  });
 });
 
 // ─── Провайдери й ключі ──────────────────────────────────────────────────────
@@ -545,6 +598,12 @@ describe('канали, що потребують оркестратора', () 
 
   it.each(cases)('%s кидає зрозумілу помилку, поки реалізації немає', async (channel) => {
     const message = await expectCode(invoke(channel, ...argsFor(channel)), 'INTERNAL');
+    expect(message).toContain('orchestrator is not connected');
+  });
+
+  it('помилка відсутнього оркестратора — мовою інтерфейсу', async () => {
+    await invoke('settings:set', { uiLanguage: 'uk' });
+    const message = await expectCode(invoke('runs:pause', fixture.runId), 'INTERNAL');
     expect(message).toContain('Оркестратор ще не підключено');
   });
 
@@ -553,7 +612,12 @@ describe('канали, що потребують оркестратора', () 
     setOrchestrator({
       extractClauses: vi.fn(async () => 1),
       buildDocProfile: vi.fn(),
-      estimateRun: vi.fn(async () => ({ tasks: 5, inputTokens: 100, costUsd: 0.01 })),
+      estimateRun: vi.fn(async () => ({
+        tasks: 5,
+        inputTokens: 100,
+        costUsd: 0.01,
+        model: 'claude-opus-5',
+      })),
       startRun,
       pauseRun: vi.fn(async () => {}),
       resumeRun: vi.fn(async () => {}),
@@ -572,6 +636,7 @@ describe('канали, що потребують оркестратора', () 
       tasks: 5,
       inputTokens: 100,
       costUsd: 0.01,
+      model: 'claude-opus-5',
     });
     expect(await invoke('export:run', fixture.runId, 'xlsx')).toEqual({
       path: 'C:/exports/run.xlsx',
@@ -588,7 +653,7 @@ describe('канали, що потребують оркестратора', () 
       }),
       'VALIDATION',
     );
-    expect(message).toContain('Реєстр вимог не вичитано');
+    expect(message).toContain('clause registry has not been reviewed');
 
     fixture.db.specs.setClausesStatus(fixture.specVersionId, 'reviewed');
     await expectCode(

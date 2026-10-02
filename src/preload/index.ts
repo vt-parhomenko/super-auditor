@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
+import { mainMessages } from '../main/i18n';
+import { isLanguage, type Language } from '../shared/domain';
 import { IPC_CHANNELS, IPC_EVENT_CHANNELS } from '../shared/ipc';
 import type { IpcChannel, IpcEventChannel, IpcEvents, RendererApi } from '../shared/ipc';
 
@@ -19,11 +21,21 @@ const invokers = Object.fromEntries(
 
 const eventSet = new Set<string>(IPC_EVENT_CHANNELS);
 
+/**
+ * Мова інтерфейсу для помилок самого мосту. Preload живе в тому ж документі,
+ * що й renderer, а той тримає `<html lang>` синхронним із розв'язаною мовою.
+ */
+function uiLanguage(): Language | undefined {
+  const lang = (globalThis as { document?: { documentElement?: { lang?: string } } }).document
+    ?.documentElement?.lang;
+  return isLanguage(lang) ? lang : undefined;
+}
+
 const api = {
   ...invokers,
   on<E extends IpcEventChannel>(event: E, listener: (payload: IpcEvents[E]) => void): () => void {
     if (!eventSet.has(event)) {
-      throw new Error(`Невідомий канал події: ${event}`);
+      throw new Error(mainMessages(uiLanguage()).preload.unknownEvent(event));
     }
     const wrapped = (_e: Electron.IpcRendererEvent, payload: IpcEvents[E]) => listener(payload);
     ipcRenderer.on(event, wrapped);

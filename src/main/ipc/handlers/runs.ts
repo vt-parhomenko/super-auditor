@@ -37,25 +37,26 @@ export type RunHandlers = Pick<
  * людиною, усе, що далі, безглузде (architecture.md §6).
  */
 function validateConfig(db: Db, config: RunConfig): void {
-  if (!config || typeof config !== 'object') throw validation('Порожня конфігурація прогону');
+  if (!config || typeof config !== 'object') throw validation((m) => m.runs.emptyConfig);
 
   const specVersion = requireSpecVersion(db, config.specVersionId);
   if (specVersion.clausesStatus !== 'reviewed') {
-    throw validation(
-      'Реєстр вимог не вичитано — прогін заблоковано до підтвердження Stage 1',
-      { specVersionId: specVersion.id, clausesStatus: specVersion.clausesStatus },
-    );
+    throw validation((m) => m.runs.registryNotReviewed, {
+      specVersionId: specVersion.id,
+      clausesStatus: specVersion.clausesStatus,
+    });
   }
 
   const documentVersionIds = config.documentVersionIds ?? [];
   if (!Array.isArray(documentVersionIds) || documentVersionIds.length === 0) {
-    throw validation('Не вибрано жодного документа для прогону');
+    throw validation((m) => m.runs.noDocuments);
   }
   for (const id of documentVersionIds) requireDocumentVersion(db, id);
 
   if (config.siteProfileId !== null && config.siteProfileId !== undefined) {
-    if (!db.siteProfiles.get(requireId(config.siteProfileId, 'siteProfileId'))) {
-      throw validation(`Профіль виробництва ${config.siteProfileId} не знайдено`);
+    const siteProfileId = requireId(config.siteProfileId, 'siteProfileId');
+    if (!db.siteProfiles.get(siteProfileId)) {
+      throw validation((m) => m.runs.siteProfileMissing(siteProfileId));
     }
   }
 }
@@ -125,7 +126,7 @@ export function runHandlers(ctx: IpcContext): RunHandlers {
       // findings, докази, рев'ю, черга завдань і зв'язки з документами йдуть
       // каскадом (ON DELETE CASCADE у схемі). Журнал витрат навмисно лишається:
       // гроші витрачені незалежно від того, чи потрібен нам результат.
-      if (!db.runs.delete(run.id)) throw notFound('Прогін', runId);
+      if (!db.runs.delete(run.id)) throw notFound('run', runId);
 
       events.emit('library:changed', { kind: 'documents' });
     },

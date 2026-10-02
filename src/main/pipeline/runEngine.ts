@@ -1,10 +1,18 @@
 import type { Db } from '@main/db';
-import type { FindingInput } from '@main/db';
+import type { FindingInput, RunRouting } from '@main/db';
+import {
+  describeLlmError,
+  errorText,
+  resultsLanguageOf,
+  resultsMessages,
+  uiLanguageOf,
+  uiMessages,
+  type MainMessages,
+} from '@main/i18n';
 import {
   buildRequest,
   criticV1,
   judgeV1,
-  describeFatalLlmError,
   isFatalLlmError,
   severityFromTool,
   verifyQuote,
@@ -17,13 +25,14 @@ import {
 import type {
   ClauseDto,
   FindingDto,
+  Language,
+  ResultsLanguage,
   RunConfig,
   RunProgress,
   Severity,
   UsageTotals,
   Verdict,
 } from '@shared/domain';
-import { OUT_OF_SCOPE_RATIONALE } from './scoping';
 
 /**
  * Stage 4/5 — рушій прогону аудиту.
@@ -71,6 +80,11 @@ export interface PlanOptions {
    * немає в мапі, перевіряються повністю.
    */
   scope?: Map<number, Set<string>>;
+  /**
+   * Моделі, якими прогін стартує. Фіксуються в прогоні, щоб resume продовжив
+   * на них же, а не на тому, що на той момент стоїть у налаштуваннях.
+   */
+  routing?: RunRouting;
 }
 
 /**
@@ -83,12 +97,18 @@ export function planRun(
   models: { judge: string; critic: string | null; promptVersion: string },
   options: PlanOptions = {},
 ): PlanResult {
+  const ui = uiMessages(db);
   const specVersion = db.specs.getVersion(config.specVersionId);
-  if (!specVersion) throw new Error(`Версія специфікації ${config.specVersionId} не знайдена`);
-  if (config.documentVersionIds.length === 0) throw new Error('Не вибрано жодного документа');
+  if (!specVersion) throw new Error(ui.run.specVersionNotFound(config.specVersionId));
+  if (config.documentVersionIds.length === 0) throw new Error(ui.run.noDocuments);
 
   const all = db.clauses.list(config.specVersionId);
-  if (all.length === 0) throw new Error('Реєстр вимог порожній — спершу виконайте Stage 1');
+  if (all.length === 0) throw new Error(ui.run.emptyRegistry);
+
+  // Мова висновків фіксується на старті: один прогін — одна мова, навіть якщо
+  // налаштування змінять між паузою і продовженням.
+  const resultsLanguage = resultsLanguageOf(db);
+  const outOfScopeRationale = resultsMessages(resultsLanguage).results.outOfScope;
 
   // Застосовність уже порахована детерміновано (Stage 3); тут лише читаємо.
   const applicable = config.siteProfileId
@@ -107,6 +127,8 @@ export function planRun(
       modelCritic: config.skipCritic ? null : models.critic,
       promptVersion: models.promptVersion,
       status: 'queued',
+      routing: options.routing ?? null,
+      resultsLanguage,
     });
 
     const tasks = [];
@@ -126,7 +148,7 @@ export function planRun(
               verdict: 'not_addressed',
               severity: null,
               confidence: null,
-              rationale: OUT_OF_SCOPE_RATIONALE,
+              rationale: outOfScopeRationale,
               evidence: [],
             });
           }
@@ -196,7 +218,8 @@ export interface ExecuteOptions {
 
 export interface RunExecutionReport {
   runId: number;
-  status: 'done' | 'cancelled' | 'failed';
+  /** `paused` — прогін зупинено паузою: він не завершений, завдання лишаються в черзі. */
+  status: 'done' | 'cancelled' | 'failed' | 'paused';
   judgeTasks: number;
   criticTasks: number;
   findings: number;
@@ -218,7 +241,7 @@ export async function executeRun(
 ): Promise<RunExecutionReport> {
   const { db } = deps;
   const run = db.runs.get(runId);
-  if (!run) throw new Error(`Прогін ${runId} не знайдено`);
+  if (!run) throw new Error(uiMessages(db).run.notFound(runId));
 
   const controller = new AbortController();
   options.signal?.addEventListener('abort', () => controller.abort(), { once: true });
@@ -240,22 +263,31 @@ export async function executeRun(
   // Завдання, що зависли в 'running' після падіння процесу, повертаємо в чергу.
   db.runTasks.requeueStale(runId);
 
-  const context = loadRunContext(db, run.specVersionId);
+  const context = loadRunContext(db, runId, run.specVersionId);
+
+  // Пауза — стан у БД, смуги самі зупиняються, коли його бачать. Але це НЕ
+  // завершення: без цієї перевірки прогін ішов далі до критика й `markFinished`,
+  // і пауза на півдорозі перетворювалась на «done» з половиною результатів.
+  const paused = (): boolean => db.runs.get(runId)?.status === 'paused';
 
   try {
     await drainStage(deps, runId, JUDGE_STAGE, controller, options, report, context);
 
-    if (!controller.signal.aborted && deps.critic) {
+    if (!controller.signal.aborted && !paused() && deps.critic) {
       enqueueCriticTasks(db, runId);
       await drainStage(deps, runId, CRITIC_STAGE, controller, options, report, context);
     }
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    db.runs.markFinished(runId, 'failed', message);
+    db.runs.markFinished(runId, 'failed', errorText(context.uiLanguage, error));
     return { ...report, status: 'failed' };
   }
 
-  const { status, error } = concludeRun(controller.signal.aborted, report);
+  if (!controller.signal.aborted && paused()) {
+    emitProgress(db, runId, null, options);
+    return { ...report, status: 'paused', usage: db.runs.usage(runId) };
+  }
+
+  const { status, error } = concludeRun(controller.signal.aborted, report, context.ui.run);
   db.runs.markFinished(runId, status, error);
   emitProgress(db, runId, null, options);
 
@@ -276,6 +308,7 @@ export async function executeRun(
 export function concludeRun(
   aborted: boolean,
   report: Pick<RunExecutionReport, 'findings' | 'failedTasks'> & { fatalError?: string },
+  messages: MainMessages['run'],
 ): { status: 'done' | 'cancelled' | 'failed'; error: string | null } {
   const failed = report.failedTasks.length;
 
@@ -284,36 +317,46 @@ export function concludeRun(
   if (report.fatalError) return { status: 'failed', error: report.fatalError };
 
   if (aborted) {
-    return { status: 'cancelled', error: failed > 0 ? `Не виконано завдань: ${failed}` : null };
+    return { status: 'cancelled', error: failed > 0 ? messages.tasksNotCompleted(failed) : null };
   }
   if (failed === 0) return { status: 'done', error: null };
 
   if (report.findings === 0) {
-    const first = report.failedTasks[0]?.error ?? 'причина невідома';
-    return {
-      status: 'failed',
-      error: `Жодне з ${failed} завдань не виконалось. Перша помилка: ${first}`,
-    };
+    const first = report.failedTasks[0]?.error ?? messages.unknownCause;
+    return { status: 'failed', error: messages.allTasksFailed(failed, first) };
   }
-  return { status: 'done', error: `Частково: не виконано завдань ${failed}` };
+  return { status: 'done', error: messages.partial(failed) };
 }
 
 interface RunContext {
   specName: string;
   specVersion: string;
   gradingRules: string | null;
-  /** Мова висновків. Цитати лишаються мовою оригіналу незалежно від неї. */
-  language: string;
+  /** Мова висновків моделі; `''` — мовою стандарту. Цитати — завжди мовою оригіналу. */
+  language: ResultsLanguage;
+  /** Службові позначки у findings — мовою результатів. */
+  results: MainMessages['results'];
+  /** Тексти помилок і статусу прогону — мовою інтерфейсу. */
+  uiLanguage: Language;
+  ui: MainMessages;
 }
 
-function loadRunContext(db: Db, specVersionId: number): RunContext {
+function loadRunContext(db: Db, runId: number, specVersionId: number): RunContext {
   const version = db.specs.getVersion(specVersionId);
   const spec = version ? db.specs.get(version.specificationId) : null;
+
+  // Мова, зафіксована на старті прогону; у старих прогонів її немає — тоді поточна.
+  const language = db.runs.launchSettings(runId)?.resultsLanguage ?? resultsLanguageOf(db);
+  const uiLanguage = uiLanguageOf(db);
+
   return {
     specName: spec?.name ?? 'Specification',
     specVersion: version?.versionLabel ?? '—',
     gradingRules: db.specs.gradingRules(specVersionId),
-    language: db.settings.get().resultsLanguage,
+    language,
+    results: resultsMessages(language).results,
+    uiLanguage,
+    ui: uiMessages(db),
   };
 }
 
@@ -374,14 +417,16 @@ async function drainStage(
         // Баланс, ключ, доступ: наступні виклики так само приречені. Зупиняємо
         // весь прогін, а завдання ПОВЕРТАЄМО в чергу — це не його провина.
         if (isFatalLlmError(error)) {
-          report.fatalError ??= describeFatalLlmError(error);
+          report.fatalError ??= describeLlmError(context.uiLanguage, error);
           deps.db.runTasks.fail(task.id, message, true);
           controller.abort();
           return;
         }
 
+        // У `run_task` — сирий текст для діагностики, у звіт (а з ним і на
+        // екран) — пояснення мовою інтерфейсу.
         deps.db.runTasks.fail(task.id, message);
-        report.failedTasks.push({ taskId: task.id, error: message });
+        report.failedTasks.push({ taskId: task.id, error: errorText(context.uiLanguage, error) });
       }
 
       emitProgress(deps.db, runId, stage, options);
@@ -406,7 +451,7 @@ async function runJudgeTask(
   const clauses = db.clauses.getMany(payload.clauseIds);
   if (clauses.length === 0) return;
 
-  const docText = documentText(db, payload.documentVersionId, options.maxDocChars);
+  const docText = documentText(db, payload.documentVersionId, context.ui, options.maxDocChars);
   const version = db.documents.getVersion(payload.documentVersionId);
   const document = version ? db.documents.get(version.documentId) : null;
 
@@ -439,7 +484,9 @@ async function runJudgeTask(
   for (const finding of result.data) {
     const clause = byNo.get(finding.clause_no);
     if (!clause) continue; // модель вигадала номер — мовчки не приймаємо
-    inputs.push(toFindingInput(runId, clause.id, payload.documentVersionId, finding, docText, report));
+    inputs.push(
+      toFindingInput(runId, clause.id, payload.documentVersionId, finding, docText, report, context),
+    );
   }
 
   // Вимоги, про які модель не сказала нічого, — це не «відповідає».
@@ -452,7 +499,7 @@ async function runJudgeTask(
       verdict: 'needs_human_review',
       severity: null,
       confidence: null,
-      rationale: 'Модель не повернула висновок для цієї вимоги.',
+      rationale: context.results.noConclusion,
       evidence: [],
     });
   }
@@ -472,10 +519,15 @@ interface DocText {
   pageAt(offset: number): number | null;
 }
 
-function documentText(db: Db, documentVersionId: number, maxChars?: number): DocText {
+function documentText(
+  db: Db,
+  documentVersionId: number,
+  ui: MainMessages,
+  maxChars?: number,
+): DocText {
   const version = db.documents.getVersion(documentVersionId);
   if (!version?.extractionId) {
-    throw new Error(`Для версії документа ${documentVersionId} немає екстракції тексту`);
+    throw new Error(ui.run.noExtraction(documentVersionId));
   }
   const full = db.extractions.getText(version.extractionId) ?? '';
   const limit = maxChars ?? Number.POSITIVE_INFINITY;
@@ -503,6 +555,7 @@ function toFindingInput(
   finding: ReportFinding,
   doc: DocText,
   report: RunExecutionReport,
+  context: Pick<RunContext, 'results'>,
 ): FindingInput {
   const evidence = finding.evidence.map((item) => {
     const verified = verifyQuote(item.quote, doc.text);
@@ -532,7 +585,7 @@ function toFindingInput(
   if (verdict === 'compliant' && !evidence.some((e) => e.verified)) {
     verdict = 'needs_human_review';
     severity = null;
-    rationale = `[доказ не підтверджено в тексті документа] ${rationale}`;
+    rationale = `${context.results.unverifiedEvidence} ${rationale}`;
     report.downgraded += 1;
   }
 
@@ -558,9 +611,19 @@ function toFindingInput(
  * не побачить ніколи.
  */
 function enqueueCriticTasks(db: Db, runId: number): number {
+  // Ідемпотентно: після паузи чи збою в критику «Продовжити» знову проходить
+  // тут, а завдання критика вже в черзі (або виконані). Без фільтра кожен
+  // finding отримував би другого критика — подвійна оплата й шанс, що повторна
+  // недетермінована перевірка понизить уже підтверджений вердикт.
+  const queued = new Set(
+    db.runTasks
+      .list(runId)
+      .filter((task) => task.stage === CRITIC_STAGE)
+      .map((task) => (task.payload as Partial<CriticTaskPayload> | null)?.findingId),
+  );
   const compliant = db.findings
     .listByRun(runId)
-    .filter((f) => f.verdict === 'compliant');
+    .filter((f) => f.verdict === 'compliant' && !queued.has(f.id));
 
   return db.runTasks.enqueueMany(
     runId,
@@ -620,7 +683,7 @@ async function runCriticTask(
     verdict: 'needs_human_review',
     severity: finding.severity,
     confidence: finding.confidence,
-    rationale: `[критик не погодився] ${verdict.reason ?? ''}\n\n${finding.rationale}`.trim(),
+    rationale: `${context.results.criticDisagreed} ${verdict.reason ?? ''}\n\n${finding.rationale}`.trim(),
     gap: finding.gap,
     recommendation: finding.recommendation,
     evidence: finding.evidence.map((e) => ({

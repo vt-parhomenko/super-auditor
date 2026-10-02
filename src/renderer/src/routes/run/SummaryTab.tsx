@@ -4,7 +4,7 @@ import { SEVERITIES, VERDICTS } from '@shared/domain';
 import { HeatmapLegend } from '@renderer/components/CoverageHeatmap';
 import { ProgressBar, Stat } from '@renderer/components/Meters';
 import { QueryState } from '@renderer/components/States';
-import { useRunSummary } from '@renderer/hooks/useRuns';
+import { useRun, useRunSummary } from '@renderer/hooks/useRuns';
 import { useT } from '@renderer/i18n';
 import { formatCost, formatNumber, formatPercent, formatTokens } from '@renderer/lib/format';
 import { useLabels } from '@renderer/lib/labels';
@@ -15,6 +15,8 @@ export function SummaryTab() {
   const params = useParams();
   const runId = Number(params.runId);
   const summary = useRunSummary(Number.isFinite(runId) ? runId : null);
+  // Той самий запит, що й шапка прогону, — з кешу, без зайвого IPC.
+  const run = useRun(Number.isFinite(runId) ? runId : null);
 
   return (
     <div className="page-pad col" style={{ gap: 'var(--sp-4)' }}>
@@ -103,6 +105,20 @@ export function SummaryTab() {
                   </p>
                 </div>
               </section>
+
+              {run.data && (
+                <section className="col" style={{ gap: 'var(--sp-2)', maxWidth: 520 }}>
+                  <span className="section-title">{t.summary.models}</span>
+                  <dl className="kv small card card-pad" style={{ margin: 0 }}>
+                    <dt>{t.summary.modelJudge}</dt>
+                    <dd className="mono">{run.data.modelJudge}</dd>
+                    <dt>{t.summary.modelCritic}</dt>
+                    <dd className={run.data.modelCritic ? 'mono' : 'dim'}>
+                      {run.data.modelCritic ?? t.summary.noCritic}
+                    </dd>
+                  </dl>
+                </section>
+              )}
             </>
           );
         }}

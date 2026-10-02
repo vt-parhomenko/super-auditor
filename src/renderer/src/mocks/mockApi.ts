@@ -12,6 +12,7 @@ import {
   type DocumentDto,
   type FindingDto,
   type HumanReviewDto,
+  type RunConfig,
   type RunProgress,
   type SiteProfileDto,
   type SpecificationDto,
@@ -27,6 +28,7 @@ import {
   buildRecentSpend,
   buildSpendSummary,
   buildSummary,
+  buildOpenRouterBalance,
   applicableCount,
   CLAUSES,
   DOCUMENTS,
@@ -58,7 +60,18 @@ const state = {
   findings: clone(FINDINGS) as FindingDto[],
   settings: clone(SETTINGS) as AppSettings,
   providers: clone(PROVIDERS) as ProviderStatus[],
+  /** Стан management-ключа: «bad» у полі вводу емулює ключ, який провайдер відхилив. */
+  managementKeys: { openrouter: 'valid' } as Record<string, 'none' | 'valid' | 'rejected'>,
 };
+
+/**
+ * Модель судження, за цінами якої рахується оцінка: перевизначення прогону →
+ * налаштування → вбудоване значення. Так само, як `resolveRouting` у main.
+ */
+function judgeModel(config: RunConfig): { provider: string; model: string } {
+  const ref = config.routing?.judge ?? state.settings.routing.judge;
+  return { provider: ref?.provider || 'anthropic', model: ref?.model || 'claude-opus-5' };
+}
 
 /** `lastRun` — похідне поле: найновіший прогін, що торкався документа. */
 function withLastRun(doc: DocumentDto): DocumentDto {
@@ -442,11 +455,17 @@ const handlers: Handlers = {
     const sections = 24;
     const tasks = sections * docs + docs + (config.skipCritic ? 0 : Math.round(clauseCount * docs * 0.2));
     const inputTokens = tasks * 21_500;
-    return {
-      tasks,
-      inputTokens,
-      costUsd: Math.round(((inputTokens * 0.9 * 0.3 + inputTokens * 0.1 * 3) / 1_000_000 + tasks * 0.02) * 100) / 100,
-    };
+    const outputTokens = tasks * 1800;
+    const judge = judgeModel(config);
+    const info = state.providers
+      .find((p) => p.id === judge.provider)
+      ?.modelInfo.find((m) => m.id === judge.model);
+    // Оцінка «до кешування префікса» — за повною ціною входу. Ціни немає — так і кажемо.
+    const costUsd =
+      info?.inputPerMTok != null && info.outputPerMTok != null
+        ? Math.round(((inputTokens * info.inputPerMTok + outputTokens * info.outputPerMTok) / 1_000_000) * 100) / 100
+        : null;
+    return { tasks, inputTokens, costUsd, model: judge.model };
   },
   'runs:start': async (config) => {
     await delay(400);
@@ -457,8 +476,10 @@ const handlers: Handlers = {
       specVersionId: config.specVersionId,
       siteProfileId: config.siteProfileId,
       status: 'running',
-      modelJudge: config.routing?.judge?.model ?? 'claude-opus-5',
-      modelCritic: config.skipCritic ? null : (config.routing?.critic?.model ?? 'claude-sonnet-4-5'),
+      modelJudge: judgeModel(config).model,
+      modelCritic: config.skipCritic
+        ? null
+        : config.routing?.critic?.model || state.settings.routing.critic?.model || 'claude-opus-5',
       promptVersion: 'judge.v1',
       startedAt: new Date().toISOString(),
       finishedAt: null,
@@ -618,7 +639,9 @@ const handlers: Handlers = {
   },
   'providers:list': async () => {
     await delay(140);
-    return state.providers;
+    // Копія, а не живий стан: інакше мутації (збережений ключ) потрапляють у кеш
+    // тим самим об'єктом, react-query не бачить змін і не перемальовує картки.
+    return clone(state.providers);
   },
   'providers:setApiKey': async (providerId) => {
     await delay(320);
@@ -641,6 +664,35 @@ const handlers: Handlers = {
     if (!provider.configured) return { ok: false, message: 'Ключ не задано' };
     if (provider.error) return { ok: false, message: provider.error };
     return { ok: true, message: `Доступно моделей: ${provider.models.length}` };
+  },
+  'providers:refreshModels': async (providerId) => {
+    await delay(900);
+    const provider = state.providers.find((p) => p.id === providerId);
+    if (!provider) throw new Error(`Невідомий провайдер ${providerId}`);
+    // Як у main: Anthropic віддає /v1/models лише з ключем, каталог OpenRouter
+    // публічний, а локальний сервер живого каталогу не має — тоді статус як є.
+    if ((providerId === 'anthropic' && !provider.configured) || !provider.cloud) return clone(provider);
+    provider.catalogueUpdatedAt = new Date().toISOString();
+    return clone(provider);
+  },
+  'providers:balance': async (providerId) => {
+    await delay(260);
+    const provider = state.providers.find((p) => p.id === providerId);
+    if (!provider?.supportsBalance || !provider.configured) return null;
+    return buildOpenRouterBalance(state.managementKeys[providerId] ?? 'none');
+  },
+  'providers:setManagementKey': async (providerId, key) => {
+    await delay(300);
+    const provider = state.providers.find((p) => p.id === providerId);
+    if (!provider?.supportsBalance) throw new Error('Провайдер не підтримує management-ключ');
+    provider.managementKeyConfigured = true;
+    state.managementKeys[providerId] = key.trim().toLowerCase() === 'bad' ? 'rejected' : 'valid';
+  },
+  'providers:clearManagementKey': async (providerId) => {
+    await delay(160);
+    const provider = state.providers.find((p) => p.id === providerId);
+    if (provider) provider.managementKeyConfigured = false;
+    state.managementKeys[providerId] = 'none';
   },
 
   // — Експорт

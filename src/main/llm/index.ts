@@ -21,6 +21,10 @@ export * from './verifyEvidence';
 // Провайдери й маршрутизація
 export * from './providers/anthropic';
 export * from './providers/openaiCompatible';
+export * from './providers/openrouter';
+export * from './providers/openrouterCatalogue';
+export * from './providers/openrouterAccount';
+export * from './binding';
 export * from './registry';
 
 // Промпти

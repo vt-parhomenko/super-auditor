@@ -8,6 +8,8 @@
  */
 
 import { ipcMain } from 'electron';
+import { DEFAULT_LANGUAGE } from '@main/i18n';
+import { isLanguage, type Language } from '@shared/domain';
 import { IPC_CHANNELS, type IpcChannel, type IpcHandlers } from '@shared/ipc';
 import { serializeIpcError, type ErrorLogger } from './errors';
 
@@ -67,7 +69,7 @@ export function registerIpcHandlers(
       try {
         return await handler(...args);
       } catch (err) {
-        throw serializeIpcError(err, channel, logger);
+        throw serializeIpcError(err, channel, logger, await uiLanguage(handlers));
       }
     });
   }
@@ -75,6 +77,20 @@ export function registerIpcHandlers(
   return () => {
     for (const channel of IPC_CHANNELS) ipc.removeHandler(channel);
   };
+}
+
+/**
+ * Мова інтерфейсу для тексту помилки. Береться з того самого `settings:get`,
+ * що бачить renderer: окремого джерела, яке могло б розійтися з ним, немає.
+ * Питаємо лише на шляху помилки, тож зайвого читання БД на кожен виклик теж немає.
+ */
+async function uiLanguage(handlers: IpcHandlers): Promise<Language> {
+  try {
+    const settings = await handlers['settings:get']();
+    return isLanguage(settings?.uiLanguage) ? settings.uiLanguage : DEFAULT_LANGUAGE;
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
 }
 
 /** Список каналів контракту — зручно для тестів і діагностики. */

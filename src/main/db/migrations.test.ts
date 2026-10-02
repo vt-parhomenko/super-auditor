@@ -76,7 +76,11 @@ describe('migrations', () => {
     const result = migrate(raw);
     expect(result.from).toBe(0);
     expect(result.to).toBe(LATEST_VERSION);
-    expect(result.applied).toEqual(['1:initial-schema', '2:llm-spend-ledger']);
+    expect(result.applied).toEqual([
+      '1:initial-schema',
+      '2:llm-spend-ledger',
+      '3:run-launch-settings',
+    ]);
     raw.close();
   });
 
@@ -154,6 +158,42 @@ describe('migrations', () => {
       { version: 3, name: 'three', up: () => undefined },
     ];
     expect(() => migrate(raw, gapped)).toThrow(/послідовними/);
+    raw.close();
+  });
+});
+
+describe('міграція 3: налаштування старту прогону', () => {
+  it('додає audit_run.routing і audit_run.results_language', () => {
+    const db = fresh();
+    const columns = db.raw
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('audit_run')")
+      .all()
+      .map((c) => c.name);
+    expect(columns).toEqual(expect.arrayContaining(['routing', 'results_language']));
+  });
+
+  it('прогони, створені до міграції, отримують NULL — resume бере поточні налаштування', () => {
+    const raw = new Database(':memory:');
+    applyPragmas(raw, 1000);
+    migrate(raw, MIGRATIONS.slice(0, 2));
+
+    raw.exec(`
+      INSERT INTO blob (hash, rel_path, byte_size, mime, created_at)
+        VALUES ('${'a'.repeat(64)}', 'x', 1, 'application/pdf', '2026-01-01');
+      INSERT INTO specification (name) VALUES ('Tesco');
+      INSERT INTO spec_version (specification_id, version_label, blob_hash)
+        VALUES (1, '5.0', '${'a'.repeat(64)}');
+      INSERT INTO audit_run (spec_version_id, model_judge, prompt_version)
+        VALUES (1, 'claude-opus-5', 'judge.v1');
+    `);
+
+    migrate(raw);
+    const row = raw
+      .prepare<[], { routing: string | null; results_language: string | null }>(
+        'SELECT routing, results_language FROM audit_run WHERE id = 1',
+      )
+      .get();
+    expect(row).toEqual({ routing: null, results_language: null });
     raw.close();
   });
 });

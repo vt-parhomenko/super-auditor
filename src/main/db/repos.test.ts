@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestDb, type Db } from './index';
+import { createTestDb, parseRunRouting, type Db } from './index';
 import { hash, requireId, seed, type SeedResult } from './fixtures';
 
 let s: SeedResult;
@@ -662,6 +662,7 @@ describe('settings', () => {
       theme: 'system',
       // Порожньо = висновки мовою стандарту.
       resultsLanguage: '',
+      uiLanguage: 'en',
     });
     clean.close();
   });
@@ -676,7 +677,37 @@ describe('settings', () => {
       localOnly: true,
       theme: 'dark',
       resultsLanguage: '',
+      uiLanguage: 'en',
     });
+  });
+
+  it('мова результатів і мова інтерфейсу справді зберігаються', () => {
+    // Раніше `set` мовчки ігнорував resultsLanguage — вибір у Налаштуваннях нічого не робив.
+    db.settings.set({ resultsLanguage: 'nl' });
+    db.settings.set({ uiLanguage: 'uk' });
+    expect(db.settings.get()).toMatchObject({ resultsLanguage: 'nl', uiLanguage: 'uk' });
+
+    db.settings.set({ resultsLanguage: '' });
+    expect(db.settings.get()).toMatchObject({ resultsLanguage: '', uiLanguage: 'uk' });
+  });
+
+  it('стара чи крива мова в базі читається як типова', () => {
+    // Колись приймався будь-який код BCP-47 — такі значення не мають їхати в промпт.
+    for (const stored of ['de', 'uk-UA', 'UK', 42, null]) {
+      db.settings.setRaw('resultsLanguage', stored);
+      db.settings.setRaw('uiLanguage', stored);
+      expect(db.settings.get()).toMatchObject({ resultsLanguage: '', uiLanguage: 'en' });
+    }
+  });
+
+  it('set нормалізує невалідну мову до типової, а не пише її в базу', () => {
+    db.settings.set({ resultsLanguage: 'uk', uiLanguage: 'nl' });
+    db.settings.set({
+      resultsLanguage: 'fr' as never,
+      uiLanguage: 'xx' as never,
+    });
+    expect(db.settings.getRaw('resultsLanguage')).toBe('');
+    expect(db.settings.getRaw('uiLanguage')).toBe('en');
   });
 
   it('routing зберігається як структура, а не рядок', () => {
@@ -721,6 +752,51 @@ describe('runs — базовий круговий рейс', () => {
     });
     expect(run?.documentVersionIds).toEqual([s.pestVersionId, s.damagedVersionId].sort((a, b) => a - b));
     expect(run?.usage).toEqual({ inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0 });
+  });
+
+  it('маршрутизація й мова старту зберігаються для resume', () => {
+    const run = db.runs.create({
+      specVersionId: s.specVersionId,
+      siteProfileId: null,
+      documentVersionIds: [s.pestVersionId],
+      modelJudge: 'openai/gpt-6-luna',
+      modelCritic: null,
+      promptVersion: 'judge.v1',
+      routing: {
+        judge: { provider: 'openrouter', model: 'openai/gpt-6-luna', effort: 'high' },
+        critic: null,
+      },
+      resultsLanguage: 'nl',
+    });
+
+    expect(db.runs.launchSettings(run.id)).toEqual({
+      routing: {
+        judge: { provider: 'openrouter', model: 'openai/gpt-6-luna', effort: 'high' },
+        critic: null,
+      },
+      resultsLanguage: 'nl',
+    });
+    expect(db.runs.launchSettings(999_999)).toBeNull();
+  });
+
+  it('прогін без зафіксованих налаштувань (стара версія) — null у кожному полі', () => {
+    expect(db.runs.launchSettings(s.runId)).toEqual({ routing: null, resultsLanguage: null });
+  });
+
+  it('битий або неповний JSON маршрутизації не валить resume', () => {
+    expect(parseRunRouting('{не json')).toBeNull();
+    expect(parseRunRouting('{"critic":null}')).toBeNull();
+    expect(parseRunRouting('{"judge":{"provider":"anthropic"}}')).toBeNull();
+    // Невідомий effort відкидається, а не їде в API.
+    expect(
+      parseRunRouting(
+        '{"judge":{"provider":"anthropic","model":"claude-opus-5","effort":"turbo"},' +
+          '"critic":{"provider":"anthropic","model":"claude-opus-5"}}',
+      ),
+    ).toEqual({
+      judge: { provider: 'anthropic', model: 'claude-opus-5' },
+      critic: { provider: 'anthropic', model: 'claude-opus-5' },
+    });
   });
 
   it('статуси й таймстемпи', () => {

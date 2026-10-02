@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, type Db } from '@main/db';
+import { mainMessages } from '@main/i18n';
 import type { CompleteRequest, CompleteResult, LlmProvider } from '@main/llm';
-import { OUT_OF_SCOPE_RATIONALE, scopeDocuments } from './scoping';
+import { scopeDocuments } from './scoping';
 import { executeRun, planRun } from './runEngine';
 
 const DOC_TEXT = 'Pest Management 0068. Our building is checked monthly for pests by Attack.';
@@ -188,7 +189,8 @@ describe('planRun зі scope', () => {
       expect(f.verdict).toBe('not_addressed');
       // severity лишається порожньою — інакше оцінка за шкалою стандарту зламається
       expect(f.severity).toBeNull();
-      expect(f.rationale).toBe(OUT_OF_SCOPE_RATIONALE);
+      // Мова результатів не задана (мовою стандарту) → позначка англійською.
+      expect(f.rationale).toBe(mainMessages('en').results.outOfScope);
       expect(f.evidence).toEqual([]);
     }
   });

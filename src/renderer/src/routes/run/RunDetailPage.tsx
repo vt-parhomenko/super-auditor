@@ -111,6 +111,12 @@ export function RunDetailPage() {
           </button>
         </div>
 
+        {/* Яка модель виносила вердикти — без цього два прогони з різними моделями не порівняти.
+            Окремим рядком: у шапці з кнопками довгі id OpenRouter переносили б дії на новий рядок. */}
+        <div className="dim xsmall truncate" style={{ marginTop: 2 }} title={t.runs.modelTitle(data.modelJudge, data.modelCritic)}>
+          {t.runs.modelTitle(data.modelJudge, data.modelCritic)}
+        </div>
+
         {data.error && (
           <div className="callout callout-danger" style={{ marginTop: 'var(--sp-2)' }}>
             {data.error}

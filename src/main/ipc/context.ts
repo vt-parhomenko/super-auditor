@@ -16,7 +16,11 @@ export interface IpcContext {
   /** Ключі API. У renderer не потрапляють ніколи. */
   readonly secrets: SecretsStore;
   readonly providers: ProviderRegistry;
-  /** false → `providers:test` не ходить у мережу (тести, офлайн-режим). */
+  /**
+   * false → жодних мережевих запитів поза викликами моделей: `providers:test`,
+   * `providers:balance`, `providers:refreshModels` і фонове оновлення
+   * каталогів моделей (тести, офлайн-режим).
+   */
   readonly allowNetwork: boolean;
   /** Вікно для модальних діалогів. `null` — вікна зараз немає. */
   getWindow(): BrowserWindow | null;

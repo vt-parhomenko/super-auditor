@@ -28,7 +28,7 @@ export function siteHandlers(ctx: IpcContext): SiteHandlers {
 
     'sites:save': (profile) => {
       const name = String(profile?.name ?? '').trim();
-      if (name.length === 0) throw validation('Назва профілю виробництва не може бути порожньою');
+      if (name.length === 0) throw validation((m) => m.sites.nameEmpty);
       if (profile.id !== undefined) requireSiteProfile(db, profile.id);
 
       return db.siteProfiles.save({
@@ -53,9 +53,7 @@ export function siteHandlers(ctx: IpcContext): SiteHandlers {
 
       const clauses = db.clauses.list(specVersionId);
       if (clauses.length === 0) {
-        throw validation('У версії специфікації ще немає вимог — спочатку Stage 1', {
-          specVersionId,
-        });
+        throw validation((m) => m.sites.noClauses, { specVersionId });
       }
 
       const report = computeApplicability(clauses, site);
@@ -77,7 +75,7 @@ export function siteHandlers(ctx: IpcContext): SiteHandlers {
       requireSiteProfile(db, siteProfileId);
       requireClause(db, clauseId);
       const text = String(reason ?? '').trim();
-      if (text.length === 0) throw validation('Причина перевизначення обовʼязкова');
+      if (text.length === 0) throw validation((m) => m.sites.overrideReasonRequired);
       db.siteProfiles.setOverride(
         requireId(siteProfileId, 'siteProfileId'),
         requireId(clauseId, 'clauseId'),

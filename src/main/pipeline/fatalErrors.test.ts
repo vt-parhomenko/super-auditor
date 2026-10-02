@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, type Db } from '@main/db';
-import { LlmError, describeFatalLlmError, isFatalLlmError } from '@main/llm';
+import { describeLlmError } from '@main/i18n';
+import { LlmError, isFatalLlmError } from '@main/llm';
 import type { CompleteResult, LlmProvider } from '@main/llm';
 import { executeRun, planRun } from './runEngine';
 
@@ -98,12 +99,29 @@ describe('класифікація фатальних помилок', () => {
   });
 
   it('пояснення про баланс каже, що робити далі', () => {
-    const text = describeFatalLlmError(
-      new LlmError('insufficient_credit', 'credit balance is too low', { providerId: 'anthropic' }),
-    );
+    const error = new LlmError('insufficient_credit', 'credit balance is too low', {
+      providerId: 'anthropic',
+    });
 
-    expect(text).toContain('баланс');
-    expect(text).toContain('Продовжити');
+    const uk = describeLlmError('uk', error);
+    expect(uk).toContain('Вичерпано баланс Anthropic');
+    expect(uk).toContain('«Продовжити»');
+    expect(uk).toContain('credit balance is too low');
+
+    const en = describeLlmError('en', error);
+    expect(en).toContain('Top up the balance at Anthropic');
+    expect(en).toContain('“Resume”');
+
+    expect(describeLlmError('nl', error)).toContain('“Hervatten”');
+  });
+
+  it('пояснення не прив’язане до Anthropic: провайдер — з помилки', () => {
+    const text = describeLlmError(
+      'en',
+      new LlmError('insufficient_credit', '402 Payment Required', { providerId: 'openrouter' }),
+    );
+    expect(text).toContain('OpenRouter');
+    expect(text).not.toContain('Anthropic');
   });
 });
 
@@ -130,6 +148,17 @@ describe('прогін при вичерпаному балансі', () => {
 
     const run = db.runs.get(runId);
     expect(run?.status).toBe('failed');
+    expect(run?.error).toContain('balance has run out');
+    expect(run?.error).toContain('Resume');
+  });
+
+  it('причина — мовою інтерфейсу', async () => {
+    db.settings.set({ uiLanguage: 'uk' });
+    const { runId } = plan();
+
+    await executeRun({ db, judge: failingProvider(creditError()) }, runId, { concurrency: 1 });
+
+    const run = db.runs.get(runId);
     expect(run?.error).toContain('Вичерпано баланс');
     expect(run?.error).toContain('Продовжити');
   });
@@ -180,7 +209,7 @@ describe('прогін при вичерпаному балансі', () => {
     const report = await executeRun({ db, judge }, runId, { concurrency: 1 });
 
     expect(judge.calls).toBe(1);
-    expect(db.runs.get(runId)?.error).toContain('Ключ API відхилено');
+    expect(db.runs.get(runId)?.error).toContain('Anthropic rejected the API key');
     expect(report.status).toBe('failed');
   });
 

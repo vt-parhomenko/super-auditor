@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestDb, type Db } from '@main/db';
 import { setStorageRoot } from '@main/paths';
 import { TESCO_SPEC } from '@main/ingest/fixtures';
-import type { ClauseExtractItem } from '@main/llm';
+import { LlmError, type ClauseExtractItem } from '@main/llm';
 import type { CompleteRequest, CompleteResult, LlmProvider } from '@main/llm';
 import { importFiles } from './import';
 import {
@@ -24,6 +24,8 @@ interface FakeOptions {
   byPage?: Record<number, ClauseExtractItem[]>;
   /** Сторінки, на яких провайдер має впасти. */
   failOn?: number[];
+  /** Чим падати на `failOn`; за замовчуванням — звичайний Error. */
+  failWith?: () => unknown;
   fallback?: ClauseExtractItem[];
 }
 
@@ -48,7 +50,7 @@ function fakeProvider(options: FakeOptions = {}): LlmProvider & { calls: number 
       const pageNo = Number(/page\s+(\d+)/i.exec(req.messages[0]?.content ?? '')?.[1] ?? 0);
 
       if (options.failOn?.includes(pageNo)) {
-        throw new Error(`сторінка ${pageNo}: провайдер недоступний`);
+        throw options.failWith?.() ?? new Error(`сторінка ${pageNo}: провайдер недоступний`);
       }
 
       const clauses = options.byPage?.[pageNo] ?? options.fallback ?? [];
@@ -386,6 +388,49 @@ describe('extractClausesForSpec', () => {
     expect(events.at(-1)?.done).toBe(true);
   });
 
+  it('вичерпаний баланс зупиняє екстракцію і не чіпає вичитаний реєстр', async () => {
+    const first = fakeProvider({ fallback: [item({ clauseNo: '8.1' })] });
+    await extractClausesForSpec(db, first, specVersionId, { allPages: true, from: 13, to: 13 });
+    db.specs.setClausesStatus(specVersionId, 'reviewed');
+
+    const broke = fakeProvider({
+      failOn: [13, 14, 15],
+      failWith: () => new LlmError('insufficient_credit', '402 Payment Required', { providerId: 'openrouter' }),
+    });
+    await expect(
+      extractClausesForSpec(db, broke, specVersionId, { allPages: true, from: 13, to: 15, concurrency: 1 }),
+    ).rejects.toThrow();
+
+    // Фатальна помилка зупиняє решту сторінок — наступні виклики так само приречені.
+    expect(broke.calls).toBe(1);
+    expect(db.clauses.list(specVersionId).map((c) => c.clauseNo)).toEqual(['8.1']);
+    expect(db.specs.getVersion(specVersionId)?.clausesStatus).toBe('reviewed');
+  });
+
+  it('жодна сторінка не вдалась — реєстр лишається, як був', async () => {
+    const first = fakeProvider({ fallback: [item({ clauseNo: '8.1' })] });
+    await extractClausesForSpec(db, first, specVersionId, { allPages: true, from: 13, to: 13 });
+
+    const failing = fakeProvider({ failOn: [13, 14] });
+    await expect(
+      extractClausesForSpec(db, failing, specVersionId, { allPages: true, from: 13, to: 14 }),
+    ).rejects.toThrow();
+    expect(db.clauses.list(specVersionId).map((c) => c.clauseNo)).toEqual(['8.1']);
+  });
+
+  it('вичитаний вручну реєстр не замінюється неповним', async () => {
+    const first = fakeProvider({ fallback: [item({ clauseNo: '8.1' })] });
+    await extractClausesForSpec(db, first, specVersionId, { allPages: true, from: 13, to: 13 });
+    db.specs.setClausesStatus(specVersionId, 'reviewed');
+
+    const partial = fakeProvider({ byPage: { 13: [item({ clauseNo: '9.1' })] }, failOn: [14] });
+    await expect(
+      extractClausesForSpec(db, partial, specVersionId, { allPages: true, from: 13, to: 14 }),
+    ).rejects.toThrow();
+    expect(db.clauses.list(specVersionId).map((c) => c.clauseNo)).toEqual(['8.1']);
+    expect(db.specs.getVersion(specVersionId)?.clausesStatus).toBe('reviewed');
+  });
+
   it('перезапис реєстру не залишає старих вимог', async () => {
     const first = fakeProvider({ fallback: [item({ clauseNo: '8.1' })] });
     await extractClausesForSpec(db, first, specVersionId, { allPages: true, from: 13, to: 13 });
@@ -421,6 +466,6 @@ describe('extractClausesForSpec', () => {
   it('відмовляє, якщо версії специфікації немає', async () => {
     await expect(
       extractClausesForSpec(db, fakeProvider(), 99_999, { allPages: true }),
-    ).rejects.toThrow('не знайдена');
+    ).rejects.toThrow('Specification version 99999 not found');
   });
 });

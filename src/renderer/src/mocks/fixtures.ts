@@ -18,10 +18,12 @@ import {
   type DocProfileDto,
   type DocumentDto,
   type DocumentRunStats,
+  type Effort,
   type EvidenceDto,
   type ExtractionDto,
   type FindingDto,
   type GapItem,
+  type ModelInfo,
   type Module,
   type Obligation,
   type RunSummary,
@@ -34,7 +36,7 @@ import {
   type SpendSummary,
   type Verdict,
 } from '@shared/domain';
-import type { AppSettings, ProviderStatus } from '@shared/ipc';
+import type { AppSettings, ProviderBalance, ProviderStatus } from '@shared/ipc';
 
 // ─── PRNG ────────────────────────────────────────────────────────────────────
 
@@ -404,7 +406,7 @@ export const RUNS: AuditRunDto[] = [
     siteProfileId: 1,
     status: 'done',
     modelJudge: 'claude-opus-5',
-    modelCritic: 'claude-sonnet-4-5',
+    modelCritic: 'claude-sonnet-5',
     promptVersion: 'judge.v1',
     startedAt: '2026-08-28T12:04:00.000Z',
     finishedAt: '2026-08-28T12:41:37.000Z',
@@ -433,7 +435,7 @@ export const RUNS: AuditRunDto[] = [
     specVersionId: 2,
     siteProfileId: null,
     status: 'failed',
-    modelJudge: 'claude-sonnet-4-5',
+    modelJudge: 'claude-sonnet-5',
     modelCritic: null,
     promptVersion: 'judge.v1',
     startedAt: '2026-08-21T16:30:00.000Z',
@@ -820,10 +822,12 @@ export function buildDocumentRuns(documentId: number): DocumentRunStats[] {
 const SPEND_ROWS: Array<[string, string, number, number, number, number, number]> = [
   // етап, модель, викликів, cost, input, cached, output
   ['clause_extract', 'claude-opus-5', 101, 3.82, 412_000, 0, 96_400],
-  ['spec_summary', 'claude-sonnet-4-5', 3, 0.21, 48_200, 12_000, 6100],
+  ['spec_summary', 'claude-sonnet-5', 3, 0.21, 48_200, 12_000, 6100],
   ['doc_profile', 'claude-haiku-4-5', 6, 0.04, 31_400, 8200, 2900],
   ['judge', 'claude-opus-5', 72, 6.42, 1_842_100, 1_301_400, 188_640],
-  ['critic', 'claude-sonnet-4-5', 24, 0.88, 214_800, 120_500, 22_100],
+  ['critic', 'claude-sonnet-5', 24, 0.88, 214_800, 120_500, 22_100],
+  // Через OpenRouter: id із префіксом розробника.
+  ['critic', 'openai/gpt-6-luna', 18, 0.04, 162_300, 98_400, 15_800],
 ];
 
 export const SPEND_BY_STAGE: SpendByStage[] = SPEND_ROWS.map(
@@ -859,7 +863,7 @@ export function buildRecentSpend(limit = 50): SpendEntry[] {
     out.push({
       id: 9000 + i,
       stage,
-      provider: 'anthropic',
+      provider: model.includes('/') ? 'openrouter' : 'anthropic',
       model,
       promptVersion: `${stage}.v1`,
       inputTokens: fromCache ? 0 : 18_400 + i * 120,
@@ -880,43 +884,203 @@ export function buildRecentSpend(limit = 50): SpendEntry[] {
 
 export const SETTINGS: AppSettings = {
   routing: {
-    clause_extract: { provider: 'anthropic', model: 'claude-opus-5', effort: 'high' },
-    spec_summary: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+    clause_extract: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' },
+    spec_summary: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
     doc_profile: { provider: 'anthropic', model: 'claude-haiku-4-5' },
-    judge: { provider: 'anthropic', model: 'claude-opus-5', effort: 'medium' },
-    critic: { provider: 'anthropic', model: 'claude-sonnet-4-5' },
+    judge: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' },
+    // Змішана маршрутизація — щоб на екрані було видно обидва провайдери.
+    critic: { provider: 'openrouter', model: 'openai/gpt-6-luna', effort: 'medium' },
   },
   concurrency: 4,
   localOnly: false,
   theme: 'system',
   resultsLanguage: 'uk',
+  uiLanguage: 'en',
 };
+
+const ALL_EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+/** Скорочення для опису моделі у фікстурах: решта полів — розумні значення за замовчуванням. */
+function mi(
+  id: string,
+  label: string,
+  vendor: string | null,
+  price: [input: number | null, output: number | null, cacheRead?: number | null],
+  extra: Partial<ModelInfo> = {},
+): ModelInfo {
+  return {
+    id,
+    label,
+    vendor,
+    contextWindow: 1_000_000,
+    maxOutputTokens: 128_000,
+    inputPerMTok: price[0],
+    outputPerMTok: price[1],
+    cacheReadPerMTok: price[2] ?? null,
+    efforts: null,
+    recommended: false,
+    tier: null,
+    ...extra,
+  };
+}
+
+const ANTHROPIC_MODELS: ModelInfo[] = [
+  mi('claude-opus-5-5', 'Claude Opus 5.5', 'Anthropic', [4, 20, 0.2], { efforts: ALL_EFFORTS, recommended: true, tier: 'top' }),
+  mi('claude-fable-5-1', 'Claude Fable 5.1', 'Anthropic', [10, 50, 0.25], { efforts: ALL_EFFORTS, recommended: true, tier: 'top' }),
+  mi('claude-opus-5', 'Claude Opus 5', 'Anthropic', [5, 25, 0.5], { efforts: ALL_EFFORTS, recommended: true, tier: 'top' }),
+  mi('claude-sonnet-5', 'Claude Sonnet 5', 'Anthropic', [2, 10, 0.2], {
+    efforts: ['low', 'medium', 'high', 'max'],
+    recommended: true,
+    tier: 'balanced',
+  }),
+  mi('claude-haiku-4-5', 'Claude Haiku 4.5', 'Anthropic', [1, 5, 0.1], {
+    contextWindow: 200_000,
+    maxOutputTokens: 64_000,
+    efforts: [],
+    recommended: true,
+    tier: 'budget',
+  }),
+];
+
+/** Куровані моделі OpenRouter — у тому порядку, в якому їх показує main. */
+const OPENROUTER_CURATED: ModelInfo[] = [
+  mi('anthropic/claude-opus-5.5', 'Claude Opus 5.5', 'Anthropic', [4, 20, 0.2], { efforts: ALL_EFFORTS, tier: 'top' }),
+  mi('anthropic/claude-sonnet-5.5', 'Claude Sonnet 5.5', 'Anthropic', [2, 10, 0.2], { efforts: ALL_EFFORTS, tier: 'balanced' }),
+  mi('anthropic/claude-fable-5.1', 'Claude Fable 5.1', 'Anthropic', [10, 50, 0.25], { efforts: ALL_EFFORTS, tier: 'top' }),
+  mi('anthropic/claude-opus-5', 'Claude Opus 5', 'Anthropic', [5, 25, 0.5], { efforts: ALL_EFFORTS, tier: 'top' }),
+  mi('anthropic/claude-sonnet-5', 'Claude Sonnet 5', 'Anthropic', [2, 10, 0.2], {
+    efforts: ['low', 'medium', 'high', 'max'],
+    tier: 'balanced',
+  }),
+  mi('anthropic/claude-haiku-4.5', 'Claude Haiku 4.5', 'Anthropic', [1, 5, 0.1], {
+    contextWindow: 200_000,
+    maxOutputTokens: 64_000,
+    efforts: [],
+    tier: 'budget',
+  }),
+  mi('openai/gpt-6-luna', 'GPT-6 Luna', 'OpenAI', [0.1, 0.5, 0.01], { efforts: ['low', 'medium', 'high'], tier: 'budget' }),
+  mi('openai/gpt-6-luna-pro', 'GPT-6 Luna Pro', 'OpenAI', [0.1, 0.5], { efforts: ['low', 'medium', 'high', 'xhigh'], tier: 'budget' }),
+  mi('openai/gpt-6-sol', 'GPT-6 Sol', 'OpenAI', [2, 10, 0.2], { efforts: ['low', 'medium', 'high', 'xhigh'], tier: 'balanced' }),
+  mi('openai/gpt-6.1-sol', 'GPT-6.1 Sol', 'OpenAI', [2, 10, 0.1], { efforts: ['low', 'medium', 'high', 'xhigh'], tier: 'balanced' }),
+  mi('deepseek/deepseek-v4-pro', 'DeepSeek V4 Pro', 'DeepSeek', [0.209, 0.418, 0.017], { tier: 'budget' }),
+  mi('deepseek/deepseek-v4-pro-0813', 'DeepSeek V4 Pro 0813', 'DeepSeek', [0.66, 1.98], { tier: 'budget' }),
+  mi('deepseek/deepseek-v4.1-flash', 'DeepSeek V4.1 Flash', 'DeepSeek', [0.02, 0.6], { efforts: [], tier: 'budget' }),
+  mi('google/gemini-3.1-pro-preview', 'Gemini 3.1 Pro Preview', 'Google', [2, 12, 0.2], { efforts: ['low', 'high'], tier: 'balanced' }),
+  mi('google/gemini-3.8-flash', 'Gemini 3.8 Flash', 'Google', [0.75, 3.75], { efforts: ['low', 'medium', 'high'], tier: 'budget' }),
+  mi('qwen/qwen3.8-max-0902', 'Qwen3.8 Max', 'Qwen', [2, 6], { tier: 'balanced' }),
+  mi('moonshotai/kimi-k3', 'Kimi K3', 'Moonshot AI', [2.7, 13.5], { efforts: [], tier: 'balanced' }),
+  mi('z-ai/glm-5.3', 'GLM 5.3', 'Z.ai', [1.4, 4.4], { tier: 'balanced' }),
+  mi('x-ai/grok-4.7', 'Grok 4.7', 'xAI', [2, 6], { contextWindow: 500_000, efforts: ['low', 'high'], tier: 'balanced' }),
+].map((m) => ({ ...m, recommended: true }));
+
+/**
+ * «Решта каталогу» — у справжньому OpenRouter їх сотні. Тут кілька десятків, щоб
+ * було видно лічильник «+N», автодоповнення в «Іншій моделі…» і моделі без ціни.
+ */
+const OPENROUTER_REST: ModelInfo[] = [
+  mi('anthropic/claude-3.7-sonnet', 'Claude 3.7 Sonnet', 'Anthropic', [3, 15, 0.3], { contextWindow: 200_000 }),
+  mi('openai/gpt-6-luna-mini', 'GPT-6 Luna Mini', 'OpenAI', [0.04, 0.2]),
+  mi('google/gemma-4-27b-it', 'Gemma 4 27B', 'Google', [0.08, 0.3], { contextWindow: 131_072 }),
+  mi('deepseek/deepseek-v4-lite', 'DeepSeek V4 Lite', 'DeepSeek', [0.05, 0.2]),
+  mi('qwen/qwen3.8-coder', 'Qwen3.8 Coder', 'Qwen', [0.4, 1.6]),
+  mi('qwen/qwen3.8-flash', 'Qwen3.8 Flash', 'Qwen', [0.05, 0.4]),
+  mi('x-ai/grok-4.7-mini', 'Grok 4.7 Mini', 'xAI', [0.3, 0.5], { contextWindow: 500_000 }),
+  mi('meta-llama/llama-4-maverick', 'Llama 4 Maverick', 'Meta', [0.15, 0.6], { contextWindow: 1_048_576 }),
+  mi('meta-llama/llama-4-scout', 'Llama 4 Scout', 'Meta', [0.08, 0.3], { contextWindow: 1_048_576 }),
+  mi('mistralai/mistral-large-2512', 'Mistral Large 2512', 'Mistral AI', [2, 6], { contextWindow: 131_072 }),
+  mi('mistralai/mistral-medium-3.2', 'Mistral Medium 3.2', 'Mistral AI', [0.4, 2], { contextWindow: 131_072 }),
+  mi('cohere/command-a', 'Command A', 'Cohere', [2.5, 10], { contextWindow: 256_000 }),
+  mi('amazon/nova-2-pro', 'Nova 2 Pro', 'Amazon', [1.25, 10], { contextWindow: 300_000 }),
+  mi('amazon/nova-2-lite', 'Nova 2 Lite', 'Amazon', [0.3, 2.5], { contextWindow: 300_000 }),
+  mi('microsoft/phi-5', 'Phi-5', 'Microsoft', [0.1, 0.4], { contextWindow: 131_072 }),
+  mi('nvidia/nemotron-ultra-2', 'Nemotron Ultra 2', 'NVIDIA', [0.6, 1.8], { contextWindow: 131_072 }),
+  mi('perplexity/sonar-pro-2', 'Sonar Pro 2', 'Perplexity', [3, 15], { contextWindow: 200_000 }),
+  mi('nousresearch/hermes-5-405b', 'Hermes 5 405B', 'Nous Research', [null, null], { contextWindow: 131_072 }),
+  mi('openrouter/auto', 'Auto Router', 'OpenRouter', [null, null], { contextWindow: 2_000_000 }),
+];
+
+const OPENROUTER_MODELS = [...OPENROUTER_CURATED, ...OPENROUTER_REST];
+
+const LOCAL_MODELS: ModelInfo[] = [
+  mi('qwen3-32b-instruct', 'qwen3-32b-instruct', null, [null, null], { contextWindow: 32_768, maxOutputTokens: null }),
+  mi('llama-4-scout', 'llama-4-scout', null, [null, null], { contextWindow: 131_072, maxOutputTokens: null }),
+];
 
 export const PROVIDERS: ProviderStatus[] = [
   {
     id: 'anthropic',
-    label: 'Anthropic',
+    label: 'Anthropic (Claude)',
     configured: true,
     cloud: true,
-    models: ['claude-opus-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
+    models: ANTHROPIC_MODELS.map((m) => m.id),
+    modelInfo: ANTHROPIC_MODELS,
+    allowCustomModel: false,
+    catalogueUpdatedAt: null,
+    supportsBalance: false,
     error: null,
   },
   {
-    id: 'openai',
-    label: 'OpenAI',
-    configured: false,
+    id: 'openrouter',
+    label: 'OpenRouter',
+    configured: true,
     cloud: true,
-    models: ['gpt-5.2', 'gpt-5.2-mini'],
+    models: OPENROUTER_MODELS.map((m) => m.id),
+    modelInfo: OPENROUTER_MODELS,
+    allowCustomModel: true,
+    catalogueUpdatedAt: '2026-10-02T07:40:00.000Z',
+    supportsBalance: true,
+    managementKeyConfigured: true,
     error: null,
   },
   {
     id: 'local',
-    label: 'Локальний (OpenAI-сумісний)',
+    label: 'Local (OpenAI-compatible)',
     configured: true,
     cloud: false,
-    models: ['qwen3-32b-instruct', 'llama-4-scout'],
+    models: LOCAL_MODELS.map((m) => m.id),
+    modelInfo: LOCAL_MODELS,
+    // Як у main: локальний сервер приймає будь-яку модель, яку в нього завантажено.
+    allowCustomModel: true,
+    catalogueUpdatedAt: null,
     error: 'Сервер на 127.0.0.1:1234 не відповідає',
   },
 ];
+
+/**
+ * Баланс OpenRouter. Без management-ключа рахунок недоступний — лишаються лише
+ * витрати ключа, як і в справжньому API (`/key` vs `/credits`).
+ */
+export function buildOpenRouterBalance(
+  managementKey: 'none' | 'valid' | 'rejected',
+): ProviderBalance {
+  const account =
+    managementKey === 'valid'
+      ? {
+          accountRemainingUsd: 74.5,
+          accountTotalCreditsUsd: 100,
+          accountTotalUsageUsd: 25.5,
+          accountUnavailableReason: null,
+        }
+      : {
+          accountRemainingUsd: null,
+          accountTotalCreditsUsd: null,
+          accountTotalUsageUsd: null,
+          accountUnavailableReason:
+            managementKey === 'rejected' ? ('management_key_rejected' as const) : ('management_key_required' as const),
+        };
+  return {
+    providerId: 'openrouter',
+    ...account,
+    keyLimitUsd: null,
+    keyLimitRemainingUsd: null,
+    keyLimitReset: null,
+    keyUsageUsd: 25.5,
+    keyUsageDailyUsd: 1.18,
+    keyUsageWeeklyUsd: 6.84,
+    keyUsageMonthlyUsd: 25.5,
+    isFreeTier: false,
+    fetchedAt: new Date().toISOString(),
+  };
+}
 
 export const SECTION_SEEDS = SECTIONS;

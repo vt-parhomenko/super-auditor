@@ -6,6 +6,7 @@
  * повторний прогін не має накручувати лічильник вартості.
  */
 
+import type { ModelPricing } from './cost';
 import { cacheKeyForRequest } from './request';
 import type {
   CompleteRequest,
@@ -46,6 +47,11 @@ export class CachedProvider implements LlmProvider {
 
   isConfigured(): boolean {
     return this.inner.isConfigured();
+  }
+
+  /** Обгортка не має власних цін — віддає ціни внутрішнього провайдера. */
+  pricingFor(model: string): ModelPricing | null {
+    return this.inner.pricingFor?.(model) ?? null;
   }
 
   async complete<T>(req: CompleteRequest<T>, signal: AbortSignal): Promise<CompleteResult<T>> {

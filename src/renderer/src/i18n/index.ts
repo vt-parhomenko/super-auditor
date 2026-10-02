@@ -10,8 +10,10 @@ export type { Messages } from './en';
 export {
   DEFAULT_LOCALE,
   LOCALES,
+  LOCALE_NAMES,
   isLocale,
   isLocalePreference,
+  needsUiLanguageSync,
   resolveLocale,
   systemLocale,
   type Locale,

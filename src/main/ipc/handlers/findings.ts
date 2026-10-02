@@ -23,7 +23,7 @@ export function findingHandlers(ctx: IpcContext): FindingHandlers {
 
   return {
     'findings:list': (query) => {
-      if (!query || typeof query !== 'object') throw validation('Порожній запит findings');
+      if (!query || typeof query !== 'object') throw validation((m) => m.findings.emptyQuery);
       requireRun(db, query.runId);
       // Ліміт зверху: renderer малює віртуалізований список, а не 20 тисяч рядків.
       const limit = Math.min(query.limit ?? 100, MAX_PAGE);
@@ -34,7 +34,7 @@ export function findingHandlers(ctx: IpcContext): FindingHandlers {
 
     'findings:review': (findingId, review) => {
       const finding = db.findings.get(requireId(findingId, 'findingId'));
-      if (!finding) throw notFound('Finding', findingId);
+      if (!finding) throw notFound('finding', findingId);
 
       return db.findings.saveReview(finding.id, {
         humanVerdict: review?.humanVerdict ?? null,
@@ -44,7 +44,7 @@ export function findingHandlers(ctx: IpcContext): FindingHandlers {
     },
 
     'findings:clearReview': (findingId) => {
-      if (!db.findings.get(requireId(findingId, 'findingId'))) throw notFound('Finding', findingId);
+      if (!db.findings.get(requireId(findingId, 'findingId'))) throw notFound('finding', findingId);
       db.findings.clearReview(findingId);
     },
   };

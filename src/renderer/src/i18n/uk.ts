@@ -140,6 +140,21 @@ export const uk: Messages = {
       judge: 'Основна вартість прогону: секція × документ.',
       critic: 'Перепровірка тільки compliant. Можна пропустити.',
     },
+
+    /** Узгоджено з «глибиною роздумів» — так називається колонка в налаштуваннях. */
+    effort: {
+      low: 'низька',
+      medium: 'середня',
+      high: 'висока',
+      xhigh: 'дуже висока',
+      max: 'максимальна',
+    },
+
+    modelTier: {
+      top: 'топ-клас',
+      balanced: 'збалансована',
+      budget: 'бюджетна',
+    },
   },
 
   format: {
@@ -190,6 +205,8 @@ export const uk: Messages = {
     costTitle: (input, cached, share, output) =>
       `Вхідні: ${input} · з кешу: ${cached} (${share}%) · вихідні: ${output}`,
     cacheShare: (share) => `${share}% кеш`,
+    inShort: 'вх.',
+    outShort: 'вих.',
   },
 
   heatmap: {
@@ -254,6 +271,7 @@ export const uk: Messages = {
     fieldTitle: 'Назва',
     fieldDocNumber: 'Номер документа',
     fieldOwner: 'Власник процесу',
+    ownerPlaceholder: 'напр. менеджер з якості',
     fieldKind: 'Тип',
     kindUnset: 'не вказано',
     versionsCallout:
@@ -332,10 +350,11 @@ export const uk: Messages = {
     colDocs: 'Документів',
     colModel: 'Модель',
     modelTitle: (judge, critic) =>
-      `judge: ${judge}${critic ? ` · critic: ${critic}` : ' · без критика'}`,
+      `судження: ${judge}${critic ? ` · критик: ${critic}` : ' · без критика'}`,
     colStarted: 'Старт',
     colDuration: 'Тривалість',
     colCost: 'Вартість',
+    costTitle: (input, output) => `вхід ${input} / вихід ${output}`,
     runTitle: (runId) => `Прогін #${runId}`,
     preparing: 'підготовка',
     running: 'виконується',
@@ -376,6 +395,19 @@ export const uk: Messages = {
     estimateInput: 'Вхідних токенів',
     estimateCost: 'Оцінка вартості',
     estimateCostSub: 'до кешування префікса',
+    estimateModel: (model) => `За цінами ${model}`,
+    estimatePriceUnknown: 'ціна невідома',
+    estimatePriceUnknownSub: 'у каталозі немає ціни цієї моделі',
+
+    modelOverrideTitle: 'Модель аналізу',
+    modelOverrideGroup: 'Яка модель аналізує документи в цьому прогоні',
+    modelOverrideSettings: 'Як у налаштуваннях',
+    modelOverrideCustom: 'Обрати для цього прогону',
+    modelOverrideCurrent: (judge, critic) => `Судження: ${judge} · критик: ${critic}`,
+    modelOverrideDefault: 'вбудована типова модель',
+    modelOverrideProviderDefault: (provider) => `типова модель ${provider}`,
+    modelOverrideHint:
+      'Діє лише на судження й критика цього прогону. Налаштування не змінюються.',
   },
 
   runDetail: {
@@ -453,6 +485,10 @@ export const uk: Messages = {
     output: 'Вихідні',
     cacheNote:
       'Нульова частка кешу на повторних прогонах означає, що в стабільному префіксі промпта щось змінюється (таймстемп, несортований JSON).',
+    models: 'Моделі',
+    modelJudge: 'Судження',
+    modelCritic: 'Критик',
+    noCritic: 'пропущено',
   },
 
   clauseRegistry: {
@@ -601,14 +637,37 @@ export const uk: Messages = {
     routingTitle: 'Маршрутизація моделей по етапах',
     routingHint:
       'Дорога модель потрібна там, де помилка коштує найдорожче: реєстр вимог і судження. Профілі документів можна віддати дешевій.',
+    routingReset: 'Скинути до типових',
+    routingResetTitle: 'Прибрати вибір для всіх етапів і повернутися до вбудованої маршрутизації',
+    routingResetDone: 'Маршрутизацію скинуто до вбудованої',
     colStage: 'Етап',
     colProvider: 'Провайдер',
     colModel: 'Модель',
-    colEffort: 'Effort',
+    colEffort: 'Глибина',
     providerNone: 'немає',
     providerCloud: ' (хмара)',
     providerLocal: ' (локально)',
+    providerNoKey: ' — без ключа',
+    providerUnavailable: (id) => `${id} (недоступний)`,
     modelDefault: 'за замовчуванням',
+    modelCustom: 'Інша модель…',
+    modelCustomPlaceholder: 'розробник/id-моделі',
+    modelNotListed: (id) => `${id} (немає в списку)`,
+    vendorOther: 'Інші',
+    ariaProvider: (stage) => `${stage}: провайдер`,
+    ariaModel: (stage) => `${stage}: модель`,
+    ariaCustomModel: (stage) => `${stage}: id моделі`,
+    ariaEffort: (stage) => `${stage}: глибина роздумів`,
+    effortUnset: 'Не задано: діє типове значення етапу.',
+    effortUnsupported: 'Ця модель не має налаштування глибини роздумів.',
+    effortStale: (effort) => `${effort} — ця модель не підтримує`,
+    hintContext: (size) => `контекст ${size}`,
+    hintPrice: (input, output) => `${input} вхід / ${output} вихід за 1M токенів`,
+    hintCacheRead: (price) => `читання з кешу ${price}`,
+    hintPriceUnknown: 'ціна невідома',
+    hintNotInCatalogue: 'Немає в каталозі моделей — контекст і ціна невідомі.',
+    hintDefault: 'Вбудована типова модель цього етапу.',
+    hintProviderDefault: (provider) => `Типова модель провайдера ${provider}.`,
     executionTitle: 'Виконання',
     fieldConcurrency: 'Конкурентність',
     concurrencyHint: 'Скільки одночасних LLM-викликів у прогоні. Забагато — 429 від провайдера.',
@@ -627,6 +686,23 @@ export const uk: Messages = {
     removeKey: 'Прибрати',
     keyHint:
       'Ключ шифрується через safeStorage у головному процесі й ніколи не повертається в інтерфейс.',
+    modelsCount: (count) => `${count} ${n(count, 'модель', 'моделі', 'моделей')}`,
+    modelsMore: (count) => `і ще ${count}`,
+    catalogueUpdated: (when) => `список оновлено ${when}`,
+    catalogueBuiltIn: 'вбудований список',
+    refreshModels: 'Оновити список моделей',
+    refreshingModels: 'Оновлюємо…',
+    refreshModelsHint: 'Завантажує живий каталог моделей провайдера. Токенів не витрачає.',
+    refreshModelsDone: (provider, count) =>
+      `${provider}: у списку ${count} ${n(count, 'модель', 'моделі', 'моделей')}`,
+    linkGetKey: 'Створити ключ',
+    linkCredits: 'Кредити',
+    linkBilling: 'Оплата',
+    cloudHintOpenRouter:
+      'OpenRouter пересилає документи розробнику обраної моделі (Anthropic, OpenAI, DeepSeek, Google…). Перемикач специфікації «Дозволити хмарних провайдерів» діє і на нього.',
+    cloudHintDirect: (provider) =>
+      `Документи йдуть в API ${provider}. Діє перемикач специфікації «Дозволити хмарних провайдерів».`,
+    localHint: 'Працює на цьому комп’ютері: документи його не залишають.',
     resultsLanguageTitle: 'Мова результатів',
     resultsLanguageLabel: 'Писати висновки',
     resultsLanguageSpec: 'Мовою стандарту',
@@ -650,13 +726,80 @@ export const uk: Messages = {
     spendColOutput: 'Вихідні',
     spendColCost: 'Вартість',
     spendBalanceNote:
-      'Це не залишок на рахунку: у Anthropic немає ендпоінта залишку коштів. Справжній баланс видно лише в консолі Anthropic.',
+      'Ці суми — власний облік викликів моделей у застосунку, а не залишок на рахунку. У Anthropic немає ендпоінта залишку коштів, тож справжній баланс видно лише в консолі Anthropic. OpenRouter повідомляє свої цифри сам: щойно його ключ збережено, вони з’являються тут окремо.',
     spendOpenConsole: 'Відкрити консоль Anthropic',
+    spendOpenOpenRouter: 'Кредити OpenRouter',
+    spendCounted: 'Пораховано застосунком',
+    spendReported: (provider) => `За даними ${provider}`,
+    spendReportedHint:
+      'Витрати API-ключа, збереженого в застосунку, як їх повідомляє провайдер, — разом із викликами цим самим ключем поза застосунком.',
 
     testing: 'Перевірка…',
     test: 'Перевірити',
     testOk: 'працює',
     testFail: 'помилка',
+  },
+
+  balance: {
+    chipKeyRemaining: (amount) => `лишилось ${amount}`,
+    chipKeyMonth: (amount) => `${amount} за місяць`,
+    chipKeyTotal: (amount) => `витрачено ${amount}`,
+    tipAccount: (provider, when) => `${provider}: залишок коштів на рахунку. Оновлено ${when}.`,
+    tipKeyRemaining: (provider, when) =>
+      `${provider}: залишок ліміту цього API-ключа — не баланс рахунку (для нього потрібен management-ключ у налаштуваннях). Оновлено ${when}.`,
+    tipKeyMonth: (provider, when) =>
+      `${provider}: витрати цього API-ключа за місяць — не баланс рахунку (для нього потрібен management-ключ у налаштуваннях). Оновлено ${when}.`,
+    tipKeyTotal: (provider, when) =>
+      `${provider}: усі витрати цього API-ключа — не баланс рахунку. Оновлено ${when}.`,
+    tipLow: 'Коштів залишається мало.',
+    tipOpenSettings: 'Клацніть, щоб відкрити налаштування.',
+    tipUnavailable: (provider) => `${provider}: баланс зараз недоступний.`,
+    tipFailed: (provider, message) => `${provider}: не вдалося отримати баланс — ${message}`,
+
+    panelTitle: (provider) => `Баланс за даними ${provider}`,
+    refresh: 'Оновити',
+    refreshing: 'Оновлюємо…',
+    fetchedAt: (when) => `оновлено ${when}`,
+    accountTitle: 'Рахунок',
+    accountRemaining: 'Залишок',
+    accountTotal: 'Куплено кредитів',
+    accountUsed: 'Витрачено',
+    keyTitle: 'Цей API-ключ',
+    keyToday: 'Сьогодні',
+    keyWeek: 'Цей тиждень',
+    keyMonth: 'Цей місяць',
+    keyTotal: 'Усього',
+    keyLimit: 'Ліміт',
+    keyNoLimit: 'без ліміту',
+    keyLimitLeft: 'Залишок ліміту',
+    limitReset: (period) =>
+      period === 'daily'
+        ? 'скидається щодня'
+        : period === 'weekly'
+          ? 'скидається щотижня'
+          : period === 'monthly'
+            ? 'скидається щомісяця'
+            : period
+              ? `скидання: ${period}`
+              : 'не скидається',
+    freeTier: 'безкоштовний тариф',
+    accountNeedsKey:
+      'Залишок на рахунку доступний лише з management-ключем. Без нього застосунок бачить, скільки витратив цей API-ключ, але не скільки коштів лишилось.',
+    accountKeyRejected: (provider) =>
+      `${provider} відхилив management-ключ. Створіть новий і збережіть його тут.`,
+    accountError: 'Не вдалося отримати залишок на рахунку. Спробуйте пізніше.',
+    unavailable: 'Провайдер не повернув баланс — перевірте ключ і з’єднання.',
+    managementKeyLabel: 'Management-ключ (необов’язково)',
+    managementKeyPlaceholder: 'management-ключ',
+    managementKeyNewPlaceholder: 'новий management-ключ (не показується)',
+    managementKeySaved: 'management-ключ збережено',
+    managementKeySave: 'Зберегти',
+    managementKeyRemove: 'Прибрати',
+    managementKeySavedToast: 'Management-ключ збережено',
+    managementKeyHint:
+      'Management-ключ може створювати, змінювати й видаляти ваші API-ключі. Застосунок використовує його лише для одного — щоб прочитати залишок на рахунку. Ключ шифрується так само, як API-ключ, і більше ніколи не показується.',
+    managementKeyCreate: 'Створити management-ключ',
+    openCredits: (provider) => `Кредити в ${provider}`,
   },
 
   pdf: {

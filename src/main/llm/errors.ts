@@ -32,22 +32,6 @@ export function isFatalLlmError(err: unknown): err is LlmError {
   return err instanceof LlmError && FATAL_KINDS.has(err.kind);
 }
 
-/** Людиною читане пояснення фатальної помилки — воно піде на екран. */
-export function describeFatalLlmError(err: LlmError): string {
-  switch (err.kind) {
-    case 'insufficient_credit':
-      return `Вичерпано баланс Anthropic. Поповніть рахунок і натисніть «Продовжити» — прогін відновиться з місця зупинки. (${err.message})`;
-    case 'auth':
-      return `Ключ API відхилено. Перевірте його в Налаштуваннях. (${err.message})`;
-    case 'not_configured':
-      return `Провайдер ${err.providerId} не налаштований — немає ключа API.`;
-    case 'cloud_blocked':
-      return err.message;
-    default:
-      return err.message;
-  }
-}
-
 export class LlmError extends Error {
   readonly kind: LlmErrorKind;
   readonly providerId: string;

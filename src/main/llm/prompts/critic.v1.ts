@@ -9,9 +9,9 @@
 
 import { z } from 'zod';
 import { MODEL_VERDICTS } from '@shared/domain';
-import type { Obligation } from '@shared/domain';
+import type { Obligation, ResultsLanguage } from '@shared/domain';
 import type { PromptDef } from '../types';
-import { joinBlocks, tag } from './util';
+import { joinBlocks, languageInstruction, languageKey, tag } from './util';
 
 export interface CriticInput {
   spec: { name: string; version: string };
@@ -24,8 +24,11 @@ export interface CriticInput {
   /** Докази, на яких judge побудував вердикт `compliant`. */
   evidence: Array<{ quote: string; page?: number | null; verified?: boolean }>;
   claimedRationale: string;
-  /** Мова пояснення критика. */
-  language?: string;
+  /**
+   * Мова пояснення критика: `reason` дописується в rationale finding'а, тож
+   * користувач читає його поруч із висновком судження. `''` — мовою стандарту.
+   */
+  language?: ResultsLanguage;
 }
 
 export const criticSchema = z.object({
@@ -89,6 +92,10 @@ export const criticV1: PromptDef<CriticInput, CriticOutput> = {
       tag('claimed_evidence', { count: input.evidence.length }, quotes),
       tag('claimed_rationale', {}, input.claimedRationale),
       'Decide whether COMPLIANT survives.',
+      languageInstruction(input.language, {
+        fields: ['reason', 'missingElements'],
+        keep: 'Keep clause numbers and the `suggestedVerdict` value unchanged as the schema defines them.',
+      }),
     );
   },
 
@@ -102,6 +109,8 @@ export const criticV1: PromptDef<CriticInput, CriticOutput> = {
         verified: item.verified ?? null,
       })),
       claimedRationale: input.claimedRationale,
+      // Див. judge.v1: мова — частина ключа, порожня — не додає нічого.
+      ...languageKey(input.language),
     };
   },
 };

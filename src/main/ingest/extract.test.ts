@@ -67,7 +67,7 @@ describe('extractText — реальні PDF', () => {
     await expect(extractText(DOC_PEST.path, 'image/tiff')).rejects.toBeInstanceOf(
       UnsupportedFormatError,
     );
-    await expect(extractText(DOC_PEST.path, 'image/tiff')).rejects.toThrow(/не підтримується/);
+    await expect(extractText(DOC_PEST.path, 'image/tiff')).rejects.toThrow(/not supported/);
   });
 });
 
@@ -111,7 +111,7 @@ describe('OCR', () => {
     await expect(getOcrEngine().recognize('/any/path.pdf')).rejects.toBeInstanceOf(
       OcrNotConfiguredError,
     );
-    await expect(getOcrEngine().recognize('/any/path.pdf')).rejects.toThrow(/OCR не налаштовано/);
+    await expect(getOcrEngine().recognize('/any/path.pdf')).rejects.toThrow(/no OCR engine/);
   });
 
   it('рушій можна підмінити й повернути назад', async () => {

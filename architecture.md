@@ -527,9 +527,25 @@ export interface LlmProvider {
 
 | Адаптер | Покриває |
 |---|---|
-| `AnthropicProvider` | Claude через `@anthropic-ai/sdk` |
-| `OpenAiProvider` | OpenAI |
+| `AnthropicProvider` | Claude напряму через `@anthropic-ai/sdk`, з Citations API |
+| `OpenRouterProvider` | Один ключ на моделі різних розробників (Claude, GPT-6, DeepSeek V4, Gemini, Qwen, Kimi, GLM, Grok): `/chat/completions` зі стрімінгом SSE, strict `json_schema`, `reasoning.effort`, облік вартості з `usage.cost` |
 | `OpenAiCompatibleProvider` | Ollama, LM Studio, vLLM, llama.cpp — один код на всіх |
+
+**OpenRouter — особливості, закладені в адаптер:**
+- Citations API немає → докази тільки `model_quote` + механічна верифікація (§10).
+- Structured output: strict `json_schema` + `provider.require_parameters`; якщо модель
+  схему не приймає — один повтор у `json_object` зі схемою в промпті й zod-repair.
+- Кеш: `cache_control` на блоці з документом (OpenRouter транслює його в Anthropic/Gemini
+  breakpoint або OpenAI `prompt_cache_breakpoint`) + `session_id` від префікса, щоб усі батчі
+  одного документа йшли до того самого постачальника.
+- `provider.data_collection: 'deny'` за замовчуванням (ADR-8); `caps.cloud = true`, тож
+  `cloudAllowed` і `localOnly` діють так само, як для Anthropic.
+- Каталог моделей (ціни, контекст, допустимі effort) — вбудований знімок + живий `GET /models`
+  раз на добу; баланс — `GET /key` (витрати ключа) і `GET /credits` (лише з management-ключем).
+
+**Привʼязка моделі.** `resolveProvider()` повертає провайдер, привʼязаний до маршруту етапу:
+`models = [routedModel]`, а effort із маршрутизації перекриває типовий effort промпта.
+Прогін зберігає свій маршрут (`audit_run.routing`), і resume продовжує тією ж моделлю.
 
 ### Маршрутизація по етапах
 
@@ -887,6 +903,9 @@ eval/
 2. **Багатомовність.** Документи можуть бути нідерландською (приклади — англійські,
    але шапки `Versie`, `Proceseigenaar` нідерландські). Перекладати перед аналізом
    чи покластися на багатомовність моделі? Схиляюсь до другого + фіксувати `lang`.
+   *Вирішено частково:* мова висновків задається в налаштуваннях (`en`/`nl`/`uk` або
+   мовою стандарту), входить у ключ кешу й фіксується на старті прогону; цитати не
+   перекладаються ніколи. Інтерфейс — `en`/`nl`/`uk`.
 3. **Гранулярність `not_addressed`.** Для зведеного finding по всьому набору документів
    потрібен окремий рядок (`document_version_id IS NULL`) — чи рахувати на льоту?
    Поки закладено окремий рядок; переглянути на M3.

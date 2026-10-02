@@ -9,6 +9,7 @@
  * а `localOnly` булевим, без вгадування типу при читанні.
  */
 
+import { isLanguage, type Language, type ResultsLanguage } from '@shared/domain';
 import type { AppSettings } from '@shared/ipc';
 import { BaseRepo, type SqliteDb } from '../types';
 
@@ -19,16 +20,27 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'system',
   // Порожньо — висновки мовою стандарту. Цитати завжди лишаються оригіналом.
   resultsLanguage: '',
+  // Renderer перезапише розв'язаною мовою при першому ж запуску вікна.
+  uiLanguage: 'en',
 };
 
 const THEMES: readonly AppSettings['theme'][] = ['system', 'light', 'dark'];
 
-/** Код мови BCP-47 або порожньо. Валідуємо, бо значення їде просто в промпт. */
-function readLanguage(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const code = value.trim();
-  if (code === '') return '';
-  return /^[a-zA-Z]{2,8}(-[a-zA-Z0-9]{2,8})*$/.test(code) ? code : null;
+/**
+ * Мова результатів: одна з підтримуваних або `''`. Значення їде просто в промпт,
+ * тож довільний рядок не приймаємо. Колись тут дозволялись будь-які коди BCP-47
+ * (`de`, `uk-UA`) — такі старі значення читаються як «мовою стандарту».
+ */
+export function isResultsLanguage(value: unknown): value is ResultsLanguage {
+  return value === '' || isLanguage(value);
+}
+
+function readResultsLanguage(value: unknown): ResultsLanguage | null {
+  return isResultsLanguage(value) ? value : null;
+}
+
+function readUiLanguage(value: unknown): Language | null {
+  return isLanguage(value) ? value : null;
 }
 
 export class SettingsRepo extends BaseRepo {
@@ -44,7 +56,9 @@ export class SettingsRepo extends BaseRepo {
       concurrency: readConcurrency(raw['concurrency']) ?? DEFAULT_SETTINGS.concurrency,
       localOnly: readBoolean(raw['localOnly']) ?? DEFAULT_SETTINGS.localOnly,
       theme: readTheme(raw['theme']) ?? DEFAULT_SETTINGS.theme,
-      resultsLanguage: readLanguage(raw['resultsLanguage']) ?? DEFAULT_SETTINGS.resultsLanguage,
+      resultsLanguage:
+        readResultsLanguage(raw['resultsLanguage']) ?? DEFAULT_SETTINGS.resultsLanguage,
+      uiLanguage: readUiLanguage(raw['uiLanguage']) ?? DEFAULT_SETTINGS.uiLanguage,
     };
   }
 
@@ -55,6 +69,17 @@ export class SettingsRepo extends BaseRepo {
       if (patch.concurrency !== undefined) this.setRaw('concurrency', clampConcurrency(patch.concurrency));
       if (patch.localOnly !== undefined) this.setRaw('localOnly', patch.localOnly);
       if (patch.theme !== undefined) this.setRaw('theme', patch.theme);
+      // Мови нормалізуються так само, як concurrency: невалідне значення стає
+      // типовим, а не лягає в базу. Зрозумілу помилку дає хендлер `settings:set`.
+      if (patch.resultsLanguage !== undefined) {
+        this.setRaw(
+          'resultsLanguage',
+          readResultsLanguage(patch.resultsLanguage) ?? DEFAULT_SETTINGS.resultsLanguage,
+        );
+      }
+      if (patch.uiLanguage !== undefined) {
+        this.setRaw('uiLanguage', readUiLanguage(patch.uiLanguage) ?? DEFAULT_SETTINGS.uiLanguage);
+      }
     });
     write();
     return this.get();

@@ -6,6 +6,8 @@
  * кешований префікс і в ключ кешу (architecture.md §9).
  */
 
+import { isLanguage, type Language } from '@shared/domain';
+
 /** Екранування значення атрибута XML-подібного тега. */
 export function attr(value: string | number | null | undefined): string {
   if (value === null || value === undefined) return '';
@@ -46,35 +48,65 @@ export function clip(text: string, maxChars: number): string {
   return `${text.slice(0, maxChars)}\n[... truncated, ${text.length - maxChars} characters omitted ...]`;
 }
 
+/** Назви мов так, як їх найкраще розуміє модель. Лише мови застосунку. */
+const LANGUAGE_NAMES: Readonly<Record<Language, string>> = {
+  en: 'English',
+  nl: 'Dutch',
+  uk: 'Ukrainian',
+};
+
+export interface LanguageInstructionOptions {
+  /** Поля відповіді, які модель пише мовою результатів. */
+  fields?: readonly string[];
+  /** Що лишається як є, крім цитат (про цитати сказано завжди). */
+  keep?: string;
+}
+
+/** Поля й правило для судження (Stage 4) — типовий випадок. */
+const JUDGE_FIELDS = ['rationale', 'gap', 'recommendation'] as const;
+const JUDGE_KEEP = 'Keep clause numbers, verdict and severity values unchanged as the schema defines them.';
 
 /**
- * Інструкція про мову висновків.
+ * Інструкція про мову висновків. `null` — мовою стандарту, без інструкції:
+ * тоді промпт байт-у-байт той самий, що й до появи вибору мови, і старий кеш
+ * лишається дійсним.
+ *
+ * Приймаються лише мови застосунку (`LANGUAGES`); будь-що інше — так само
+ * «мовою стандарту», а не сирий рядок у промпті.
  *
  * Критично: ЦИТАТИ лишаються мовою оригіналу. Якщо модель перекладе їх разом
  * із висновками, механічна перевірка (`verifyQuote`) перестане знаходити їх у
  * тексті документа — і кожен вердикт `compliant` буде понижено до
  * `needs_human_review`. Тобто переклад цитат тихо зруйнував би весь аудит.
  */
-export function languageInstruction(language: string | undefined | null): string | null {
+export function languageInstruction(
+  language: string | undefined | null,
+  options: LanguageInstructionOptions = {},
+): string | null {
   const code = (language ?? '').trim();
-  if (code === '') return null;
+  if (!isLanguage(code)) return null;
 
-  const name = LANGUAGE_NAMES[code.toLowerCase()] ?? code;
+  const fields = options.fields ?? JUDGE_FIELDS;
+  const keep = options.keep ?? JUDGE_KEEP;
   return (
-    `Write \`rationale\`, \`gap\` and \`recommendation\` in ${name}. ` +
+    `Write ${listFields(fields)} in ${LANGUAGE_NAMES[code]}. ` +
     'Keep every `quote` EXACTLY as it appears in the source document — never translate, ' +
-    'paraphrase or re-punctuate a quote. Keep clause numbers, verdict and severity values ' +
-    'unchanged as the schema defines them.'
+    `paraphrase or re-punctuate a quote. ${keep}`
   );
 }
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  uk: 'Ukrainian',
-  en: 'English',
-  nl: 'Dutch',
-  de: 'German',
-  fr: 'French',
-  es: 'Spanish',
-  pl: 'Polish',
-  it: 'Italian',
-};
+/** `a`, `b` and `c` — так само, як промпт називав поля до параметризації. */
+function listFields(fields: readonly string[]): string {
+  const quoted = fields.map((field) => `\`${field}\``);
+  if (quoted.length <= 1) return quoted.join('');
+  return `${quoted.slice(0, -1).join(', ')} and ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * Мова для `cacheInput`. Порожня (мовою стандарту) не додає ключа взагалі —
+ * тоді вхід кешу байт-у-байт той самий, що до появи вибору мови.
+ */
+export function languageKey(language: string | undefined | null): { language?: string } {
+  const code = (language ?? '').trim();
+  return isLanguage(code) ? { language: code } : {};
+}

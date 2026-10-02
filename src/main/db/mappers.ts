@@ -263,6 +263,9 @@ export interface AuditRunRow {
   output_tokens: number;
   cost_usd: number;
   error: string | null;
+  /** JSON `RunRouting`; NULL у прогонів до міграції 3. */
+  routing: string | null;
+  results_language: string | null;
 }
 
 export interface RunTaskRow {

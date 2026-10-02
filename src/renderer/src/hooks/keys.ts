@@ -30,6 +30,9 @@ export const qk = {
 
   settings: () => ['settings'] as const,
   providers: () => ['providers'] as const,
+  /** Без id — префікс для інвалідації балансу всіх провайдерів разом. */
+  providerBalance: (providerId?: string) =>
+    providerId == null ? (['providerBalance'] as const) : (['providerBalance', providerId] as const),
   spend: () => ['spend'] as const,
   recentSpend: (limit: number) => ['recentSpend', limit] as const,
 } as const;

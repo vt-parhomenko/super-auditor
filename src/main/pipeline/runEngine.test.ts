@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, type Db } from '@main/db';
+import { mainMessages } from '@main/i18n';
+import { LlmError } from '@main/llm';
 import type { CompleteRequest, CompleteResult, LlmProvider, ReportFinding } from '@main/llm';
-import type { RunConfig } from '@shared/domain';
+import type { ResultsLanguage, RunConfig } from '@shared/domain';
 import { CRITIC_STAGE, JUDGE_STAGE, executeRun, planRun } from './runEngine';
 
 // ─── Оснастка ────────────────────────────────────────────────────────────────
@@ -104,6 +106,10 @@ interface FakeOptions {
   judge?: (clauseNos: string[]) => ReportFinding[];
   critic?: { agree: boolean; reason?: string };
   failFirst?: number;
+  /** Чим падати в `failFirst`-викликах; за замовчуванням — звичайний Error. */
+  failWith?: () => unknown;
+  /** Кожен запит, що дійшов до провайдера. */
+  requests?: Array<CompleteRequest<unknown>>;
 }
 
 function fakeProvider(id: string, options: FakeOptions = {}): LlmProvider & { calls: number } {
@@ -125,9 +131,10 @@ function fakeProvider(id: string, options: FakeOptions = {}): LlmProvider & { ca
     isConfigured: () => true,
     async complete<T>(req: CompleteRequest<T>): Promise<CompleteResult<T>> {
       provider.calls += 1;
+      options.requests?.push(req as CompleteRequest<unknown>);
       if (options.failFirst && failures < options.failFirst) {
         failures += 1;
-        throw new Error('тимчасовий збій провайдера');
+        throw options.failWith?.() ?? new Error('тимчасовий збій провайдера');
       }
 
       const user = req.messages[0]?.content ?? '';
@@ -217,11 +224,30 @@ describe('planRun', () => {
 
   it('відмовляє на порожньому реєстрі вимог', () => {
     db.clauses.deleteAll(s.specVersionId);
-    expect(() => planRun(db, config(), MODELS)).toThrow('Реєстр вимог порожній');
+    expect(() => planRun(db, config(), MODELS)).toThrow('The clause registry is empty');
   });
 
   it('відмовляє, коли не вибрано документів', () => {
-    expect(() => planRun(db, config({ documentVersionIds: [] }), MODELS)).toThrow('жодного документа');
+    expect(() => planRun(db, config({ documentVersionIds: [] }), MODELS)).toThrow('No documents selected');
+  });
+
+  it('пояснює відмову мовою інтерфейсу', () => {
+    db.settings.set({ uiLanguage: 'uk' });
+    expect(() => planRun(db, config({ documentVersionIds: [] }), MODELS)).toThrow(
+      'Не вибрано жодного документа',
+    );
+  });
+
+  it('фіксує в прогоні маршрутизацію і мову висновків', () => {
+    db.settings.set({ resultsLanguage: 'nl' });
+    const routing = {
+      judge: { provider: 'openrouter', model: 'openai/gpt-6-luna', effort: 'high' as const },
+      critic: null,
+    };
+
+    const { runId } = planRun(db, config(), MODELS, { routing });
+
+    expect(db.runs.launchSettings(runId)).toEqual({ routing, resultsLanguage: 'nl' });
   });
 });
 
@@ -262,7 +288,7 @@ describe('executeRun', () => {
     expect(report.downgraded).toBe(3);
     const findings = db.findings.listByRun(runId);
     expect(findings.every((f) => f.verdict === 'needs_human_review')).toBe(true);
-    expect(findings[0]?.rationale).toContain('доказ не підтверджено');
+    expect(findings[0]?.rationale).toContain('[evidence not confirmed in the document text]');
     expect(findings[0]?.evidence[0]?.verified).toBe(false);
   });
 
@@ -291,7 +317,7 @@ describe('executeRun', () => {
     const findings = db.findings.listByRun(runId);
     expect(findings).toHaveLength(3);
 
-    const ignored = findings.filter((f) => f.rationale.includes('не повернула висновок'));
+    const ignored = findings.filter((f) => f.rationale.includes('returned no conclusion'));
     expect(ignored).toHaveLength(1);
     expect(ignored[0]?.verdict).toBe('needs_human_review');
   });
@@ -321,7 +347,25 @@ describe('executeRun', () => {
     expect(db.runTasks.list(runId, 'failed')).toHaveLength(1);
     expect(db.runTasks.list(runId, 'done')).toHaveLength(1);
     // Часткова невдача не має виглядати як бездоганний прогін.
-    expect(db.runs.get(runId)?.error).toContain('Частково');
+    expect(db.runs.get(runId)?.error).toContain('Partially completed');
+  });
+
+  it('текст помилки прогону — мовою інтерфейсу, помилки моделі пояснено', async () => {
+    db.settings.set({ uiLanguage: 'uk' });
+    const { runId } = planRun(db, config(), MODELS);
+    const judge = fakeProvider('judge', {
+      failFirst: 99,
+      failWith: () => new LlmError('transport', 'ECONNRESET', { providerId: 'openrouter' }),
+    });
+
+    await executeRun({ db, judge }, runId, { concurrency: 1 });
+
+    const error = db.runs.get(runId)?.error ?? '';
+    expect(error).toContain('Жодне з 2 завдань не виконалось');
+    expect(error).toContain("Немає з'єднання з OpenRouter");
+    expect(error).toContain('ECONNRESET');
+    // У черзі лишається сирий текст — для діагностики.
+    expect(db.runTasks.list(runId, 'failed')[0]?.lastError).toBe('ECONNRESET');
   });
 
   it('прогін, у якому впало ВСЕ, є failed — а не «Завершено» без зауважень', async () => {
@@ -386,6 +430,28 @@ describe('executeRun', () => {
 
 // ─── Критик ──────────────────────────────────────────────────────────────────
 
+describe('пауза', () => {
+  it('пауза посеред судження лишає прогін на паузі, а не «done», і критика не запускає', async () => {
+    const { runId } = planRun(db, config(), MODELS);
+    const judge = fakeProvider('judge');
+    const inner = judge.complete.bind(judge);
+    // Користувач тисне «Пауза», поки перший виклик моделі ще в дорозі.
+    judge.complete = async (req, signal) => {
+      db.runs.setStatus(runId, 'paused');
+      return inner(req, signal);
+    };
+    const critic = fakeProvider('critic', { critic: { agree: true } });
+
+    const report = await executeRun({ db, judge, critic }, runId, { concurrency: 1 });
+
+    expect(report.status).toBe('paused');
+    expect(db.runs.get(runId)?.status).toBe('paused');
+    expect(db.runTasks.list(runId, 'pending').filter((t) => t.stage === JUDGE_STAGE).length).toBeGreaterThan(0);
+    expect(db.runTasks.list(runId).filter((t) => t.stage === CRITIC_STAGE)).toHaveLength(0);
+    expect(critic.calls).toBe(0);
+  });
+});
+
 describe('прохід критика', () => {
   it('перевіряє лише compliant', async () => {
     const { runId } = planRun(db, config(), MODELS);
@@ -420,8 +486,31 @@ describe('прохід критика', () => {
     expect(report.downgraded).toBeGreaterThan(0);
     const findings = db.findings.listByRun(runId);
     expect(findings.every((f) => f.verdict === 'needs_human_review')).toBe(true);
-    expect(findings[0]?.rationale).toContain('критик не погодився');
+    expect(findings[0]?.rationale).toContain('[the critic disagreed]');
+    expect(findings[0]?.rationale).toContain('Доказ описує намір, а не виконання.');
     expect(findings[0]?.evidence.length).toBeGreaterThan(0);
+  });
+
+  it('«Продовжити» після збою критика не ставить другого критика тим самим findings', async () => {
+    const { runId } = planRun(db, config(), MODELS);
+    const judge = fakeProvider('judge');
+    const broke = fakeProvider('critic', {
+      critic: { agree: true },
+      failFirst: 100,
+      failWith: () => new LlmError('insufficient_credit', '402', { providerId: 'openrouter' }),
+    });
+
+    const first = await executeRun({ db, judge, critic: broke }, runId, { concurrency: 1 });
+    expect(first.status).toBe('failed');
+    const queued = db.runTasks.list(runId).filter((t) => t.stage === CRITIC_STAGE);
+    expect(queued.length).toBeGreaterThan(0);
+
+    const critic = fakeProvider('critic', { critic: { agree: true } });
+    await executeRun({ db, judge, critic }, runId, { concurrency: 1 });
+
+    const all = db.runTasks.list(runId).filter((t) => t.stage === CRITIC_STAGE);
+    expect(all).toHaveLength(queued.length);
+    expect(critic.calls).toBe(queued.length);
   });
 
   it('без критика етап пропускається', async () => {
@@ -433,6 +522,98 @@ describe('прохід критика', () => {
     expect(report.criticTasks).toBe(0);
     expect(db.runTasks.list(runId).filter((t) => t.stage === CRITIC_STAGE)).toHaveLength(0);
     expect(db.findings.listByRun(runId).every((f) => f.verdict === 'compliant')).toBe(true);
+  });
+});
+
+// ─── Мова результатів ────────────────────────────────────────────────────────
+
+describe('мова результатів', () => {
+  /**
+   * Службові позначки пишуться мовою результатів; `''` (мовою стандарту) →
+   * англійська, бо стандарти англомовні.
+   */
+  const cases: Array<[ResultsLanguage, 'en' | 'nl' | 'uk']> = [
+    ['', 'en'],
+    ['en', 'en'],
+    ['nl', 'nl'],
+    ['uk', 'uk'],
+  ];
+
+  it.each(cases)('позначки у findings для «%s» — мовою %s', async (language, catalog) => {
+    db.settings.set({ resultsLanguage: language, uiLanguage: 'en' });
+    const markers = mainMessages(catalog).results;
+
+    const { runId } = planRun(db, config(), MODELS);
+    // Секція 10: перша вимога — compliant без підтвердженої цитати, другу модель
+    // проігнорувала. Секція 12: compliant з добрим доказом — його заперечить критик.
+    const judge = fakeProvider('judge', {
+      judge: (nos) =>
+        nos[0] === '10.1'
+          ? [finding({ clause_no: '10.1', evidence: [{ quote: 'Вигадана цитата.' }] })]
+          : nos.map((no) => finding({ clause_no: no })),
+    });
+    const critic = fakeProvider('critic', { critic: { agree: false, reason: 'Too thin.' } });
+
+    await executeRun({ db, judge, critic }, runId, { concurrency: 1 });
+
+    const byClause = new Map(db.findings.listByRun(runId).map((f) => [f.clause.clauseNo, f]));
+    expect(byClause.get('10.1')?.rationale.startsWith(markers.unverifiedEvidence)).toBe(true);
+    expect(byClause.get('10.2')?.rationale).toBe(markers.noConclusion);
+    expect(byClause.get('12.1')?.rationale.startsWith(`${markers.criticDisagreed} Too thin.`)).toBe(true);
+  });
+
+  it('позначка поза scope — мовою результатів', () => {
+    db.settings.set({ resultsLanguage: 'uk' });
+    const { runId } = planRun(db, config(), MODELS, {
+      scope: new Map([[s.documentVersionId, new Set(['10'])]]),
+    });
+
+    const outside = db.findings.listByRun(runId).filter((f) => f.clause.sectionNo === '12');
+    expect(outside[0]?.rationale).toBe(mainMessages('uk').results.outOfScope);
+  });
+
+  it('мова йде в промпт судження і критика та в ключ кешу', async () => {
+    db.settings.set({ resultsLanguage: 'nl' });
+    const requests: Array<CompleteRequest<unknown>> = [];
+    const { runId } = planRun(db, config(), MODELS);
+
+    await executeRun(
+      {
+        db,
+        judge: fakeProvider('judge', { requests }),
+        critic: fakeProvider('critic', { critic: { agree: true }, requests }),
+      },
+      runId,
+      { concurrency: 1 },
+    );
+
+    const judgeReq = requests.find((r) => r.stage === 'judge');
+    const criticReq = requests.find((r) => r.stage === 'critic');
+    expect(judgeReq?.messages[0]?.content).toContain('in Dutch');
+    expect(criticReq?.messages[0]?.content).toContain('Write `reason` and `missingElements` in Dutch');
+    expect(judgeReq?.cacheInput).toMatchObject({ language: 'nl' });
+    expect(criticReq?.cacheInput).toMatchObject({ language: 'nl' });
+  });
+
+  it('мовою стандарту — без інструкції і без мови в ключі кешу', async () => {
+    const requests: Array<CompleteRequest<unknown>> = [];
+    const { runId } = planRun(db, config(), MODELS);
+
+    await executeRun({ db, judge: fakeProvider('judge', { requests }) }, runId, { concurrency: 1 });
+
+    expect(requests[0]?.messages[0]?.content).not.toContain('Write `rationale`');
+    expect(requests[0]?.cacheInput).not.toHaveProperty('language');
+  });
+
+  it('прогін тримає мову старту, навіть якщо налаштування змінили до продовження', async () => {
+    db.settings.set({ resultsLanguage: 'uk' });
+    const { runId } = planRun(db, config(), MODELS);
+    db.settings.set({ resultsLanguage: 'nl' });
+
+    const requests: Array<CompleteRequest<unknown>> = [];
+    await executeRun({ db, judge: fakeProvider('judge', { requests }) }, runId, { concurrency: 1 });
+
+    expect(requests[0]?.messages[0]?.content).toContain('in Ukrainian');
   });
 });
 
