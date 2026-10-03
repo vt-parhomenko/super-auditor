@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { EFFORTS, type ModelInfo } from '@shared/domain';
 import type { ProviderStatus } from '@shared/ipc';
 import {
+  effectiveRouting,
   choiceWithEffort,
   choiceWithModel,
   choiceWithProvider,
@@ -277,5 +278,28 @@ describe('ціни й контекст', () => {
     expect(modelOptionLabel(opus, 'top')).toBe('Claude Opus 5.5 · $4/$20 · top');
     expect(modelOptionLabel(llama)).toBe('Llama 4 Scout');
     expect(modelOptionLabel(model('id-only', { label: '' }))).toBe('id-only');
+  });
+});
+
+describe('effectiveRouting', () => {
+  it('нічого не збережено — вбудована маршрутизація: OpenRouter, Opus 5.5 для судження', () => {
+    expect(effectiveRouting('judge', null)).toEqual({ provider: 'openrouter', model: 'anthropic/claude-opus-5.5', effort: 'high' });
+    expect(effectiveRouting('doc_profile', undefined)).toEqual({ provider: 'openrouter', model: 'anthropic/claude-haiku-4.5' });
+  });
+
+  it('обрано лише провайдера — типова модель етапу саме в нього, effort етапу', () => {
+    expect(effectiveRouting('critic', { provider: 'anthropic', model: '' })).toEqual({
+      provider: 'anthropic',
+      model: 'claude-opus-5-5',
+      effort: 'high',
+    });
+  });
+
+  it('збережений вибір лишається як є', () => {
+    expect(effectiveRouting('judge', { provider: 'openrouter', model: 'openai/gpt-6-luna', effort: 'low' })).toEqual({
+      provider: 'openrouter',
+      model: 'openai/gpt-6-luna',
+      effort: 'low',
+    });
   });
 });

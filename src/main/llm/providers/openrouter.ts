@@ -43,7 +43,7 @@ import { SseParser } from './sse';
 
 export const OPENROUTER_PROVIDER_ID = 'openrouter';
 /** Дзеркало дефолту Anthropic: збалансована модель для етапів без явного вибору. */
-export const OPENROUTER_DEFAULT_MODEL = 'anthropic/claude-sonnet-5';
+export const OPENROUTER_DEFAULT_MODEL = 'anthropic/claude-sonnet-5.5';
 /** Id management-ключа в сховищі секретів. Лише для `GET /credits`. */
 export const OPENROUTER_MANAGEMENT_KEY_ID = 'openrouter:management';
 
@@ -915,9 +915,12 @@ function errorFromHttp(status: number, text: string, headers: Headers): OpenRout
   }
   const error = isRecord(body) && isRecord(body.error) ? body.error : null;
   const metadata = error && isRecord(error.metadata) ? error.metadata : null;
+  const base = (typeof error?.message === 'string' && error.message) || text.slice(0, 500) || `HTTP ${status}`;
+  const upstream = upstreamDetail(metadata);
   return new OpenRouterApiError({
     status,
-    message: (typeof error?.message === 'string' && error.message) || text.slice(0, 500) || `HTTP ${status}`,
+    // Саме цим шляхом приходить «400: Provider returned error» — деталь постачальника обов'язкова.
+    message: upstream ? `${base} — ${upstream}` : base,
     errorType: typeof metadata?.error_type === 'string' ? metadata.error_type : null,
     metadata,
     retryAfterMs: parseRetryAfter(headers),
@@ -927,12 +930,42 @@ function errorFromHttp(status: number, text: string, headers: Headers): OpenRout
 function errorFromBody(error: OpenRouterErrorBody): OpenRouterApiError {
   const code = typeof error.code === 'number' ? error.code : Number(error.code);
   const metadata = isRecord(error.metadata) ? error.metadata : null;
+  const base = typeof error.message === 'string' && error.message ? error.message : 'Mid-stream error';
+  const upstream = upstreamDetail(metadata);
   return new OpenRouterApiError({
     status: Number.isFinite(code) && code > 0 ? code : 502,
-    message: typeof error.message === 'string' && error.message ? error.message : 'Mid-stream error',
+    // «Provider returned error» сам по собі нічого не пояснює: справжня причина —
+    // у `metadata.raw` від постачальника (Anthropic, Google…). Без неї користувач
+    // бачив лише загальну фразу, а ми не могли зрозуміти, що саме не так.
+    message: upstream ? `${base} — ${upstream}` : base,
     errorType: typeof metadata?.error_type === 'string' ? metadata.error_type : null,
     metadata,
   });
+}
+
+/** «Anthropic: <повідомлення постачальника>» з `metadata.raw`; null — деталей немає. */
+export function upstreamDetail(metadata: Record<string, unknown> | null): string | null {
+  if (!metadata) return null;
+  const provider = typeof metadata.provider_name === 'string' ? metadata.provider_name : null;
+  const raw = metadata.raw;
+  let text: string | null = null;
+  if (typeof raw === 'string' && raw.trim()) {
+    text = raw.trim();
+    // Часто це JSON-рядок помилки постачальника — дістаємо з нього саме повідомлення.
+    try {
+      const parsed: unknown = JSON.parse(text);
+      const nested = isRecord(parsed) && isRecord(parsed.error) ? parsed.error.message : isRecord(parsed) ? parsed.message : null;
+      if (typeof nested === 'string' && nested.trim()) text = nested.trim();
+    } catch {
+      /* не JSON — лишаємо як є */
+    }
+  } else if (isRecord(raw)) {
+    const nested = isRecord(raw.error) ? raw.error.message : raw.message;
+    text = typeof nested === 'string' ? nested : JSON.stringify(raw);
+  }
+  if (!text) return provider ? `${provider}` : null;
+  const clipped = text.length > 500 ? `${text.slice(0, 500)}…` : text;
+  return provider ? `${provider}: ${clipped}` : clipped;
 }
 
 /** 408 / 429 / 5xx / мережа; 402 лише з Retry-After. «Немає ендпоінта» не повторюємо. */
@@ -949,11 +982,25 @@ function isRoutingConstraint(err: OpenRouterApiError): boolean {
   return /no endpoints found|no allowed providers|data policy|routing requirements|meets your routing/i.test(err.message);
 }
 
-/** Схему / response_format не прийняли — привід перейти на json_object. */
+/**
+ * Строгий режим відхилили — привід один раз спробувати json_object.
+ *
+ * Будь-який 400/422 у строгому режимі, а не лише той, де в тексті є «schema»:
+ * OpenRouter загортає відмову постачальника в безлике «Provider returned error»,
+ * і за словами відрізнити «не прийняв схему» від іншого неможливо. Повтор без
+ * `response_format` безкоштовний (відхилений запит не тарифікується), а якщо
+ * причина інша — друга відповідь покаже її вже з деталями постачальника.
+ */
 function isStructuredOutputRejection(err: OpenRouterApiError): boolean {
   if (err.status !== 400 && err.status !== 404 && err.status !== 422) return false;
   if (/data policy|data_collection/i.test(err.message)) return false;
-  return /response_format|json_schema|structured|schema|requested parameters|require_parameters/i.test(err.message);
+  // 404 «No endpoints … requested parameters» — ендпоінти відсіяв саме
+  // `require_parameters` строгого режиму; json_object його не вимагає.
+  if (err.status === 404) {
+    return /response_format|json_schema|structured|schema|requested parameters|require_parameters/i.test(err.message);
+  }
+  if (isRoutingConstraint(err) || isModerationBlock(err)) return false;
+  return true;
 }
 
 function isModerationBlock(err: OpenRouterApiError): boolean {

@@ -34,6 +34,7 @@ import {
   DOCUMENTS,
   DOC_PROFILES,
   FINDINGS,
+  PROSE_CLAUSES,
   PROVIDERS,
   RUNS,
   RUN_DOC_VERSION_IDS,
@@ -42,7 +43,9 @@ import {
   SPECIFICATIONS,
   SPEC_SUMMARY,
 } from './fixtures';
+import { effectiveRouting } from '@renderer/lib/models';
 import { buildMockPdf } from './mockPdf';
+import { applyMockDeletion, mockDeleteImpact } from './mockLibraryDeletion';
 
 type Handlers = Omit<RendererApi, 'on'>;
 
@@ -54,7 +57,7 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 const state = {
   documents: clone(DOCUMENTS) as DocumentDto[],
   specs: clone(SPECIFICATIONS) as SpecificationDto[],
-  clauses: clone(CLAUSES) as ClauseDto[],
+  clauses: clone([...CLAUSES, ...PROSE_CLAUSES]) as ClauseDto[],
   sites: clone(SITE_PROFILES) as SiteProfileDto[],
   runs: clone(RUNS) as AuditRunDto[],
   findings: clone(FINDINGS) as FindingDto[],
@@ -69,13 +72,17 @@ const state = {
  * налаштування → вбудоване значення. Так само, як `resolveRouting` у main.
  */
 function judgeModel(config: RunConfig): { provider: string; model: string } {
-  const ref = config.routing?.judge ?? state.settings.routing.judge;
-  return { provider: ref?.provider || 'anthropic', model: ref?.model || 'claude-opus-5' };
+  return effectiveRouting('judge', config.routing?.judge ?? state.settings.routing.judge ?? null);
 }
 
 /** `lastRun` — похідне поле: найновіший прогін, що торкався документа. */
 function withLastRun(doc: DocumentDto): DocumentDto {
-  return { ...doc, lastRun: buildDocumentRuns(doc.id)[0] ?? null };
+  return { ...doc, lastRun: liveDocumentRuns(doc.id)[0] ?? null };
+}
+
+/** Статистика з фікстур, але лише по перевірках, яких ще не видалили. */
+function liveDocumentRuns(documentId: number) {
+  return buildDocumentRuns(documentId).filter((stats) => state.runs.some((r) => r.id === stats.runId));
 }
 
 function allSpecVersions(): SpecVersionDto[] {
@@ -85,8 +92,9 @@ function allSpecVersions(): SpecVersionDto[] {
 function refreshSpecCounters(): void {
   for (const spec of state.specs) {
     for (const version of spec.versions) {
-      if (version.id !== 1) continue;
       const list = state.clauses.filter((c) => c.specVersionId === version.id);
+      // Версії без вимог у моку (Tesco 4.2) тримають свої статичні лічильники.
+      if (list.length === 0) continue;
       version.clauseCount = list.length;
       version.reviewedClauseCount = list.filter(
         (c) => c.reviewStatus === 'confirmed' || c.reviewStatus === 'edited',
@@ -204,7 +212,7 @@ const handlers: Handlers = {
   },
   'documents:runs': async (documentId) => {
     await delay(150);
-    return buildDocumentRuns(documentId);
+    return liveDocumentRuns(documentId);
   },
   'documents:update': async (documentId, patch) => {
     await delay(140);
@@ -214,10 +222,29 @@ const handlers: Handlers = {
     emit('library:changed', { kind: 'documents' });
     info(`Метадані «${doc.title}» збережено`);
   },
-  'documents:delete': async (documentId) => {
-    await delay(140);
-    state.documents = state.documents.filter((d) => d.id !== documentId);
-    emit('library:changed', { kind: 'documents' });
+
+  // — Видалення специфікацій і документів (разом із перевірками, що на них спираються)
+  'library:deleteImpact': async (target) => {
+    await delay(280);
+    const impact = mockDeleteImpact(state, target);
+    if (!impact) throw new Error(`[NOT_FOUND] ${target.kind} ${target.id}`);
+    return impact;
+  },
+  'library:delete': async (target) => {
+    await delay(360);
+    const before = mockDeleteImpact(state, target);
+    if (!before) throw new Error(`[NOT_FOUND] ${target.kind} ${target.id}`);
+    // Як у main: живу перевірку спершу зупиняємо. Журнал витрат не чіпаємо.
+    for (const run of before.runs) {
+      stopTimer(run.id);
+      progressByRun.delete(run.id);
+    }
+    const impact = applyMockDeletion(state, target);
+    if (!impact) throw new Error(`[NOT_FOUND] ${target.kind} ${target.id}`);
+    const isSpec = target.kind === 'specification' || target.kind === 'specVersion';
+    if (isSpec) emit('library:changed', { kind: 'specifications' });
+    if (!isSpec || impact.runs.length > 0) emit('library:changed', { kind: 'documents' });
+    return impact;
   },
 
   // — Специфікації
@@ -283,6 +310,7 @@ const handlers: Handlers = {
       topic: clause.topic ?? null,
       requirementText: clause.requirementText,
       modules: clause.modules ?? [],
+      markers: clause.markers ?? [],
       obligation: clause.obligation ?? null,
       pageFrom: null,
       pageTo: null,
@@ -479,8 +507,8 @@ const handlers: Handlers = {
       modelJudge: judgeModel(config).model,
       modelCritic: config.skipCritic
         ? null
-        : config.routing?.critic?.model || state.settings.routing.critic?.model || 'claude-opus-5',
-      promptVersion: 'judge.v1',
+        : effectiveRouting('critic', config.routing?.critic ?? state.settings.routing.critic ?? null).model,
+      promptVersion: 'judge.v2',
       startedAt: new Date().toISOString(),
       finishedAt: null,
       usage: { inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0 },
@@ -592,7 +620,7 @@ const handlers: Handlers = {
       if (query.unreviewed === true && f.review) return false;
       if (query.unreviewed === false && !f.review) return false;
       if (search) {
-        const hay = `${f.clause.clauseNo} ${f.clause.topic ?? ''} ${f.rationale} ${f.gap ?? ''}`.toLowerCase();
+        const hay = `${f.clause.clauseNo} ${f.clause.topic ?? ''} ${f.rationale} ${f.gap ?? ''} ${f.outsideEvidence ?? ''}`.toLowerCase();
         if (!hay.includes(search)) return false;
       }
       return true;

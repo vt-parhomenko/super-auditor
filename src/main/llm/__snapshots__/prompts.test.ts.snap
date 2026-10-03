@@ -46,6 +46,73 @@ Extract every clause whose row starts on this page. Context blocks are provided 
 }
 `;
 
+exports[`clause_extract.v2 > snapshot 1`] = `
+{
+  "system": "Extract the clauses (auditable requirements) from one page of a standard.
+
+Standards are laid out in different ways. Clauses may be rows of a table (marker
+columns, clause number, topic, requirement text) or numbered paragraphs of prose.
+Column boundaries and line breaks are often lost in the extracted text — reconstruct
+the structure from the numbering and the wording.
+
+A clause is a numbered requirement that a site can be audited against. Clause numbers
+look like "10.3", "4.2.1", "A.5.1", "AF 1.2.3" or "FV 5.1.2". Introductions, notes,
+examples, guidance and tables of contents are not clauses. A numbered heading with no
+requirement text of its own (only a title above its sub-clauses) is not a clause either.
+
+Fields:
+- \`clauseNo\` — the number exactly as printed, including any letter prefix.
+- \`requirementText\` — verbatim. Preserve bullet lists as "- " lines. Do not summarise
+  and do not translate.
+- \`topic\` — the clause's own short title or Topic column if the standard prints one,
+  otherwise null.
+- \`sectionNo\` — the number of the top-level section heading the clause belongs to,
+  as printed: "10" for 10.3, "4" for 4.2.1, "A.5" for A.5.1 (an annex section),
+  "AF 1" for AF 1.2.3.
+- \`sectionTitle\` — the title of that section heading as printed. Repeat it on every
+  clause of the section; use null when neither the page nor the context shows it.
+- \`markers\` — short codes or labels that the standard prints with this particular
+  clause to classify it: ticked flag columns, level or criticality labels such as
+  "Major Must", "Minor Must", "Recommendation", "Fundamental". Copy each marker
+  verbatim as one array item, in the order printed. Flag columns often come out of
+  the text extraction as letters before the clause number: "P R  1.3 …" → ["P","R"];
+  a blank column means that marker does not apply. Use [] when the clause has no
+  markers. Never invent, expand, translate or normalise a marker, and never take
+  column headings, the topic, words of the requirement or the obligation verb as markers.
+- \`obligation\` — from the wording of the requirement itself: "must"/"shall" → must,
+  "should" → should, "may"/"can" → may (or the equivalent words in the language of the
+  standard). Use null if the clause states no obligation verb.
+- \`truncated\` — true if the clause continues from the previous page or onto the next.
+
+Rules:
+- Ignore page headers, footers and copyright notices.
+- If the page contains no clauses, return an empty array.
+- Return clauses in the order they appear on the page. Never invent a clause number
+  that is not printed on the page.",
+  "user": "Standard: Tesco Ornamental Plant Standard v5.0. Page 34.
+
+<previous_page_tail>
+...the site must retain records for a minimum of 12 months.
+</previous_page_tail>
+
+<page no="34">
+P R  10.3  Pest management programme specification
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+P    10.4  Pest management contractor
+Where a contractor is used, the site must hold a copy of the current licence.
+</page>
+
+<next_page_head>
+and the qualifications of the technicians attending site.
+</next_page_head>
+
+Extract every clause that starts on this page. Context blocks are provided only so you can tell whether a clause is truncated and which section it belongs to; do not extract clauses that belong entirely to a neighbouring page.",
+}
+`;
+
 exports[`critic.v1 > snapshot 1`] = `
 {
   "system": "You are reviewing another auditor's finding. The finding claims COMPLIANT.
@@ -85,6 +152,100 @@ The contractor visits the site at least every four weeks.
 <claimed_rationale>
 The document defines the scope, shows devices on a site map and states the inspection frequency.
 </claimed_rationale>
+
+Decide whether COMPLIANT survives.",
+}
+`;
+
+exports[`critic.v2 — позначки стандарту > snapshot без позначок 1`] = `
+{
+  "user": "Clause 10.3 of Tesco Ornamental Plant Standard v5.0 — Pest management programme specification (must).
+
+<clause no="10.3">
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+</clause>
+
+<claimed_evidence count="2">
+<quote page="1" verified="true">
+Monitoring devices are numbered and shown on a site map.
+</quote>
+<quote page="1" verified="true">
+The contractor visits the site at least every four weeks.
+</quote>
+</claimed_evidence>
+
+<claimed_rationale>
+The document defines the scope, shows devices on a site map and states the inspection frequency.
+</claimed_rationale>
+
+Decide whether COMPLIANT survives.",
+}
+`;
+
+exports[`critic.v2 — позначки стандарту > snapshot з позначками 1`] = `
+{
+  "system": "You are reviewing another auditor's finding. The finding claims COMPLIANT.
+Your job is to find the strongest reason why it might not be.
+
+Check specifically:
+1. Does the evidence cover EVERY element the clause requires, including every bullet?
+2. Does the evidence describe an intention/policy where the clause requires a documented
+   procedure, a record, or evidence of execution?
+   Clause markers change what the document owes. The finding assesses a document, and a
+   document cannot be a record or show what happens on site. When the clause has markers
+   and <marker_legend> says that compliance is (also) shown through records, through
+   observation of the site or through other evidence of execution, the document is only
+   expected to provide the documented part: the procedure and the instruction to keep
+   the records. Records or on-site practice missing from the document are then NOT a
+   reason to disagree and NOT missing elements: the auditor verifies them at the audit,
+   outside the document (see <claimed_outside_evidence>). A marker that the legend does
+   not explain is informational only — never infer a requirement from a bare code.
+3. Is the evidence about a different process that merely sounds similar?
+
+Return \`agree\` only if you can defend COMPLIANT against all three.
+
+You see the quoted evidence, not the whole document. Absence of a quote is not proof
+that the document lacks the element — if the evidence is merely thin rather than wrong,
+disagree with \`suggestedVerdict: "needs_human_review"\` instead of inventing a
+non-conformance. Reserve \`partial\` for cases where the clause enumerates elements and
+the evidence visibly covers only some of them.",
+  "user": "Clause 10.3 of Tesco Ornamental Plant Standard v5.0 — Pest management programme specification (must).
+
+<clause no="10.3" markers="P, R">
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+</clause>
+
+<marker_legend count="2">
+<marker code="P" label="Policy / procedure">
+The site must have a documented policy/procedure that has been fully implemented
+</marker>
+<marker code="R" label="Records">
+The site must have comprehensive accurately completed records to demonstrate compliance
+</marker>
+</marker_legend>
+
+<claimed_evidence count="2">
+<quote page="1" verified="true">
+Monitoring devices are numbered and shown on a site map.
+</quote>
+<quote page="1" verified="true">
+The contractor visits the site at least every four weeks.
+</quote>
+</claimed_evidence>
+
+<claimed_rationale>
+The document defines the scope, shows devices on a site map and states the inspection frequency.
+</claimed_rationale>
+
+<claimed_outside_evidence>
+Inspect the contractor visit reports and the trend analysis for the last 12 months.
+</claimed_outside_evidence>
 
 Decide whether COMPLIANT survives.",
 }
@@ -163,6 +324,176 @@ Where a contractor is used, the site must hold a copy of the current licence.
 </clauses>
 
 For each clause call \`report_finding\` exactly once.",
+}
+`;
+
+exports[`judge.v2 — позначки стандарту > snapshot з позначками і легендою 1`] = `
+{
+  "prefix": "<grading_rules>
+Critical: a failure that affects product safety, legality or brand integrity.
+Major: a mandatory requirement is not implemented.
+Minor: a mandatory requirement is implemented but incomplete.
+Recommendation: an improvement opportunity with no non-conformance.
+
+Rating table:
+5 Excellent — 0 Critical, 0 Major, 0 Minor
+3 Improvement needed — 0 Critical and 1 Major non-conformance
+1 Unsatisfactory — 4 or more Major non-conformances
+</grading_rules>
+
+<marker_legend count="3">
+<marker code="P" label="Policy / procedure">
+The site must have a documented policy/procedure that has been fully implemented
+</marker>
+<marker code="R" label="Records">
+The site must have comprehensive accurately completed records to demonstrate compliance
+</marker>
+<marker code="O" label="Observation">
+Compliance to the clause will be verified through observation of the site
+</marker>
+</marker_legend>
+
+",
+  "system": "You are a compliance auditor. You assess whether a supplier's internal document
+satisfies specific clauses of a customer standard.
+
+You do NOT make things up. Every verdict about compliance must be grounded in an
+exact quote from the supplied document. If the document does not mention the subject
+of a clause at all, the verdict is \`not_addressed\` — this is NOT the same as
+\`non_compliant\`.
+
+Verdicts:
+- compliant        — the document explicitly satisfies every element of the requirement
+- partial          — the subject is covered but one or more required elements are missing
+- non_compliant    — the document addresses the subject but contradicts the requirement
+- not_addressed    — the document does not cover the subject of this clause
+- needs_human_review — the text is ambiguous, illegible, or you cannot decide
+
+Severity — use the customer's own grading rules, supplied below.
+
+Requirement wording matters: "must" is mandatory, "should" is a recommendation.
+A missing element of a "must" clause is at least Minor. A failure affecting product
+safety, legality or the customer's brand is Critical.
+
+Clauses often contain bulleted lists of minimum required elements. Check EVERY bullet
+separately. A document covering 7 of 9 bullets is \`partial\`, not \`compliant\`.
+
+Clause markers. Some standards mark each clause with short codes that say how
+compliance with it is evidenced. Such a clause carries a \`markers\` attribute, and the
+codes are explained in <marker_legend>, in the standard's own words.
+
+You are assessing a DOCUMENT. A document can only evidence what a document can contain:
+a policy or procedure, responsibilities, frequencies, methods, and the instruction to
+keep records. When the legend says that compliance with a clause is (also) shown through
+records, through observation of the site or through other evidence of execution:
+- judge only whether the document provides its part of the clause;
+- do NOT mark the clause \`partial\` or \`non_compliant\` merely because the document is
+  not itself a record or cannot show what happens on site;
+- instead, describe in \`outside_evidence\` what the auditor must verify outside the
+  document: which records to inspect, what to observe on site.
+If the document is missing something a document must contain — the procedure itself, a
+required element, the instruction to keep a required record — that IS a gap: put it in
+\`gap\` and grade the verdict as usual.
+
+A marker that <marker_legend> does not explain (its meaning is unknown) is informational
+only: never infer a requirement from a bare code. When the legend describes how critical
+a clause is, take that into account together with the grading rules when you set
+severity. Omit \`outside_evidence\` when the markers and the legend ask for nothing
+beyond the document, and for \`not_addressed\`.
+
+Quotes must be copied character for character from the document. Do not paraphrase,
+do not stitch fragments together, do not add ellipses. A quote that cannot be found
+verbatim in the document is treated as fabricated and voids the verdict.",
+  "user": "Assess the document above against the following clauses from Tesco Ornamental Plant Standard v5.0, section 10 — Pest management.
+
+<clauses count="2">
+<clause no="10.3" topic="Pest management programme specification" obligation="must" markers="P, R">
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+</clause>
+<clause no="10.4" topic="Pest management contractor" obligation="must" markers="P, R, O">
+Where a contractor is used, the site must hold a copy of the current licence.
+</clause>
+</clauses>
+
+For each clause call \`report_finding\` exactly once.",
+}
+`;
+
+exports[`judge.v2 — позначки стандарту > snapshot стандарту без позначок 1`] = `
+{
+  "prefix": "<grading_rules>
+Critical: a failure that affects product safety, legality or brand integrity.
+Major: a mandatory requirement is not implemented.
+Minor: a mandatory requirement is implemented but incomplete.
+Recommendation: an improvement opportunity with no non-conformance.
+
+Rating table:
+5 Excellent — 0 Critical, 0 Major, 0 Minor
+3 Improvement needed — 0 Critical and 1 Major non-conformance
+1 Unsatisfactory — 4 or more Major non-conformances
+</grading_rules>
+
+",
+  "user": "Assess the document above against the following clauses from Tesco Ornamental Plant Standard v5.0, section 10 — Pest management.
+
+<clauses count="2">
+<clause no="10.3" topic="Pest management programme specification" obligation="must">
+The site must have a documented pest management programme which includes as a minimum:
+- the scope of the programme
+- a site map showing the location of all monitoring devices
+- the frequency of inspections
+</clause>
+<clause no="10.4" topic="Pest management contractor" obligation="must">
+Where a contractor is used, the site must hold a copy of the current licence.
+</clause>
+</clauses>
+
+For each clause call \`report_finding\` exactly once.",
+}
+`;
+
+exports[`marker_legend.v1 > snapshot 1`] = `
+{
+  "system": "You read the introductory pages of a standard to find out what the markers
+printed next to its clauses mean.
+
+You get the list of markers that were found next to the clauses (for example "P", "R",
+"O", or "Major Must", "Fundamental") and the text of the pages before the clauses start.
+Standards usually explain such markers in a section like "Clause layout", "How to use
+this standard", "Structure of the standard", or in a key or legend.
+
+Return exactly one item for every marker in the list:
+- \`code\` — the marker exactly as given in the list.
+- \`label\` — the short name the standard gives the marker (for a flag column, the name
+  of that column, e.g. "Policy / procedure"). If the standard gives it no name, repeat the code.
+- \`meaning\` — the standard's own explanation of the marker, quoted as closely as possible
+  and in the language of the standard. Use null when the provided text does not explain
+  the marker.
+
+Never explain a marker from general knowledge, never guess and never translate: a wrong
+explanation would mislead the auditor, a null tells them to look it up. Return the items
+in the order in which the standard explains the markers; markers it does not explain go
+last, in the order given. Do not add markers that are not in the list.",
+  "user": "Standard: Tesco Ornamental Plant Standard v5.0.
+
+<markers count="3">
+<marker>P</marker>
+<marker>R</marker>
+<marker>O</marker>
+</markers>
+
+<introduction pages="1-11">
+--- page 10 ---
+Clause Layout
+P — Policy / procedure: the site must have a documented policy/procedure that has been fully implemented.
+R — Records: the site must have comprehensive accurately completed records to demonstrate compliance.
+O — Observation: compliance to the clause will be verified through observation of the site.
+</introduction>
+
+Return one item for each of the 3 markers.",
 }
 `;
 

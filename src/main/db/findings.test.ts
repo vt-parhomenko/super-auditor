@@ -130,6 +130,7 @@ describe('findings — запис і читання', () => {
       confidence: 0.9,
       gap: null,
       recommendation: null,
+      outsideEvidence: null,
       createdAt: '2026-08-30T10:00:00.000Z',
       review: null,
     });
@@ -170,6 +171,33 @@ describe('findings — запис і читання', () => {
     expect(db.findings.list({ runId: s.runId }).total).toBe(before);
     expect(updated.verdict).toBe('partial');
     expect(updated.evidence).toHaveLength(1);
+  });
+
+  it('«перевірити поза документом»: круговий рейс, перезапис, upsertMany і пошук', () => {
+    const base = {
+      runId: s.runId,
+      clauseId: cid('10.1'),
+      documentVersionId: s.pestVersionId,
+      verdict: 'compliant' as const,
+      rationale: 'Процедура описана повністю.',
+    };
+    const saved = db.findings.upsert({
+      ...base,
+      outsideEvidence: 'Inspect the signed pest-control visit reports for the last 12 months.',
+    });
+    expect(saved.outsideEvidence).toBe('Inspect the signed pest-control visit reports for the last 12 months.');
+    expect(db.findings.get(saved.id)?.outsideEvidence).toBe(saved.outsideEvidence);
+    // Пошук бачить і це поле: «де мені дивитись записи» — природний запит аудитора.
+    expect(db.findings.list({ runId: s.runId, search: 'visit reports' }).items.map((f) => f.id)).toEqual([saved.id]);
+
+    // Повторний upsert без поля — нічого перевіряти поза документом (як у judge.v1).
+    expect(db.findings.upsert(base).outsideEvidence).toBeNull();
+
+    const [many] = db.findings.upsertMany([{ ...base, outsideEvidence: 'Observe bait stations on site.' }]);
+    expect(many?.id).toBe(saved.id);
+    expect(db.findings.listByRun(s.runId).find((f) => f.id === saved.id)?.outsideEvidence).toBe(
+      'Observe bait stations on site.',
+    );
   });
 
   it('UNIQUE (run_id, clause_id, document_version_id)', () => {

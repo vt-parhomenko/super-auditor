@@ -23,6 +23,15 @@ export function useLabels(): Labels {
   return useT().labels;
 }
 
+/**
+ * Severity для `not_addressed` / `not_applicable` — лише потенційна: модель ставить
+ * її в сенсі «наскільки погано, якби цього не було ніде». Це не зауваження до
+ * документа, тому такий бейдж показуємо приглушеним (див. SeverityBadge `potential`).
+ */
+export function isPotentialSeverity(verdict: Verdict): boolean {
+  return verdict === 'not_addressed' || verdict === 'not_applicable';
+}
+
 /** CSS-суфікс класу для вердикту (використовується у бейджах, тепловій карті, дереві). */
 export function verdictClass(verdict: Verdict): string {
   return `v-${verdict}`;

@@ -27,6 +27,7 @@ const EMPTY: Draft = {
  */
 export function SitesPage() {
   const t = useT();
+  const labels = useLabels();
   usePageContext([{ label: t.nav.sites }]);
 
   const sites = useSites();
@@ -49,7 +50,7 @@ export function SitesPage() {
           <p className="muted small">{t.sites.subtitle}</p>
         </div>
         <div className="page-head-actions">
-          <button type="button" className="btn btn-primary" onClick={() => setSelectedId('new')}>
+          <button type="button" className="btn btn-primary" onClick={() => setSelectedId('new')} data-tour="sites-new">
             {t.sites.newProfile}
           </button>
         </div>
@@ -78,8 +79,13 @@ export function SitesPage() {
                       <span style={{ fontWeight: 600 }} className="truncate">
                         {site.name}
                       </span>
-                      <span className="xsmall dim truncate">
-                        {site.modules.join(' / ')} · {t.sites.certificationsCount(site.certifications.length)}
+                      {/* «P / O» без слова «модулі» читалось як шифр. */}
+                      <span
+                        className="xsmall dim truncate"
+                        title={site.modules.map((m) => `${m} — ${labels.module[m]}`).join(', ')}
+                      >
+                        {t.sites.modulesList(site.modules.join(' · '))} ·{' '}
+                        {t.sites.certificationsCount(site.certifications.length)}
                       </span>
                     </span>
                   </button>
@@ -283,6 +289,12 @@ function SiteEditor({
             </span>
           )}
         </div>
+        {/* Число без наслідку нічого не каже: пояснюємо, що станеться в прогоні. */}
+        {result && (
+          <span className="small muted">
+            {t.sites.resultExplain(result.applicable, result.notApplicable)}
+          </span>
+        )}
         <span className="field-hint">{t.sites.recomputeHint}</span>
       </div>
     </div>

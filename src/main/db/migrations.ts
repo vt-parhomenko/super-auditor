@@ -91,6 +91,70 @@ export const MIGRATIONS: readonly Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    name: 'standard-markers',
+    up(db) {
+      // Позначки біля вимог — власні коди стандарту (Tesco: P / R / O; GlobalG.A.P.:
+      // «Major Must»; BRCGS: «Fundamental»), а розшифровка — його ж легенда.
+      // Раніше застосунок знав лише P/R/O і читав їх як «модулі застосовності»,
+      // хоча стандарт Tesco (стор. 10, «Clause Layout») пояснює їх як тип доказу.
+      //
+      //   clause.markers             JSON ["P","R"] — дослівно, як надруковано
+      //   spec_version.marker_legend JSON [{code,label,meaning}] | NULL
+      db.exec(`
+        ALTER TABLE clause ADD COLUMN markers TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE spec_version ADD COLUMN marker_legend TEXT;
+      `);
+
+      // `modules` заповнювала лише екстракція у форматі Tesco (clause_extract.v1
+      // читав саме колонки P R O таблиці), тож це рівно надруковані позначки стандарту.
+      db.exec(`
+        UPDATE clause SET markers = modules
+         WHERE json_valid(modules) AND json_type(modules) = 'array';
+      `);
+
+      // Легенда — слова самого стандарту Tesco зі стор. 10. Тут літерал, а не
+      // спільна константа: міграція має назавжди робити те саме, що й сьогодні.
+      const tescoLegend = JSON.stringify([
+        {
+          code: 'P',
+          label: 'Policy / procedure',
+          meaning: 'The site must have a documented policy/procedure that has been fully implemented',
+        },
+        {
+          code: 'R',
+          label: 'Records',
+          meaning: 'The site must have comprehensive accurately completed records to demonstrate compliance',
+        },
+        {
+          code: 'O',
+          label: 'Observation',
+          meaning: 'Compliance to the clause will be verified through observation of the site',
+        },
+      ]);
+      db.prepare(
+        `UPDATE spec_version SET marker_legend = ?
+          WHERE id IN (SELECT DISTINCT spec_version_id FROM clause
+                        WHERE json_valid(modules) AND json_type(modules) = 'array'
+                          AND json_array_length(modules) > 0)`,
+      ).run(tescoLegend);
+    },
+  },
+  {
+    version: 5,
+    name: 'finding-outside-evidence',
+    up(db) {
+      // Документ не може бути записом і не може показати практику на місці. Коли
+      // легенда стандарту каже, що вимога доводиться записами чи оглядом (Tesco:
+      // R / O), `judge.v2` не знижує за це вердикт, а пише окремо, що аудитор має
+      // перевірити поза документом. Окрема колонка, а не дописка в `gap`: «чого
+      // бракує документу» і «що перевірити на аудиті» — різні речі для людини.
+      //
+      // NULL — нічого перевіряти поза документом, або finding від `judge.v1`.
+      db.exec('ALTER TABLE finding ADD COLUMN outside_evidence TEXT;');
+    },
+  },
 ];
 
 export const LATEST_VERSION: number = MIGRATIONS.reduce((max, m) => Math.max(max, m.version), 0);

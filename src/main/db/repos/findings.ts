@@ -52,6 +52,8 @@ export interface FindingInput {
   rationale: string;
   gap?: string | null;
   recommendation?: string | null;
+  /** Що перевірити поза документом (записи, огляд на місці) — див. `FindingDto.outsideEvidence`. */
+  outsideEvidence?: string | null;
   createdAt?: string;
   evidence?: EvidenceInput[];
 }
@@ -98,8 +100,8 @@ export class FindingsRepo extends BaseRepo {
         const res = this.stmt(
           `INSERT INTO finding
              (run_id, clause_id, document_version_id, verdict, severity, confidence,
-              rationale, gap, recommendation, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              rationale, gap, recommendation, outside_evidence, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           input.runId,
           input.clauseId,
@@ -110,6 +112,7 @@ export class FindingsRepo extends BaseRepo {
           input.rationale,
           input.gap ?? null,
           input.recommendation ?? null,
+          input.outsideEvidence ?? null,
           input.createdAt ?? nowIso(),
         );
         id = toId(res);
@@ -117,7 +120,7 @@ export class FindingsRepo extends BaseRepo {
         id = existingId;
         this.stmt(
           `UPDATE finding SET verdict = ?, severity = ?, confidence = ?, rationale = ?,
-                              gap = ?, recommendation = ?, created_at = ?
+                              gap = ?, recommendation = ?, outside_evidence = ?, created_at = ?
             WHERE id = ?`,
         ).run(
           input.verdict,
@@ -126,6 +129,7 @@ export class FindingsRepo extends BaseRepo {
           input.rationale,
           input.gap ?? null,
           input.recommendation ?? null,
+          input.outsideEvidence ?? null,
           input.createdAt ?? nowIso(),
           id,
         );
@@ -341,9 +345,10 @@ export class FindingsRepo extends BaseRepo {
       const like = `%${escapeLike(query.search)}%`;
       where.push(
         "(f.rationale LIKE ? ESCAPE '\\' OR f.gap LIKE ? ESCAPE '\\' OR f.recommendation LIKE ? ESCAPE '\\'" +
+          " OR f.outside_evidence LIKE ? ESCAPE '\\'" +
           " OR c.clause_no LIKE ? ESCAPE '\\' OR c.topic LIKE ? ESCAPE '\\' OR c.requirement_text LIKE ? ESCAPE '\\')",
       );
-      params.push(like, like, like, like, like, like);
+      params.push(like, like, like, like, like, like, like);
     }
 
     return { where, params };

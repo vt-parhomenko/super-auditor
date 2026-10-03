@@ -1,12 +1,13 @@
 import { useMemo, useState, type DragEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 import { DOCUMENT_KINDS, type DocumentDto, type DocumentKind } from '@shared/domain';
+import type { LibraryDeleteTarget } from '@shared/ipc';
+import { DeleteLibraryButton, DeleteLibraryDialog } from '@renderer/components/DeleteLibraryDialog';
 import { Modal } from '@renderer/components/Modal';
 import { LastRunSummary, NoRunsYet } from '@renderer/components/RunStats';
 import { EmptyState, QueryState } from '@renderer/components/States';
 import {
-  useDeleteDocument,
   useDocuments,
   useImportFiles,
   usePickFiles,
@@ -15,6 +16,7 @@ import {
 import { useIpcEvent } from '@renderer/hooks/useIpcEvent';
 import { getMessages, useT } from '@renderer/i18n';
 import { baseName, formatBytes, formatDate, formatDateTime } from '@renderer/lib/format';
+import { documentDisplayName } from '@renderer/lib/libraryDeletion';
 import { useLabels } from '@renderer/lib/labels';
 import { usePageContext } from '@renderer/store/topbar';
 import { toast } from '@renderer/store/ui';
@@ -36,6 +38,7 @@ export function LibraryPage() {
   const [kind, setKind] = useState<DocumentKind | ''>('');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<DocumentDto | null>(null);
+  const [deleting, setDeleting] = useState<LibraryDeleteTarget | null>(null);
 
   const query = useMemo(
     () => ({ ...(search.trim() ? { search: search.trim() } : {}), ...(kind ? { kind } : {}) }),
@@ -89,7 +92,7 @@ export function LibraryPage() {
           <p className="muted small">{t.library.subtitle}</p>
         </div>
         <div className="page-head-actions">
-          <button type="button" className="btn btn-primary" onClick={onPick} disabled={pick.isPending}>
+          <button type="button" className="btn btn-primary" onClick={onPick} disabled={pick.isPending} data-tour="library-import">
             {pick.isPending ? t.library.picking : t.library.import}
           </button>
         </div>
@@ -157,13 +160,24 @@ export function LibraryPage() {
                 open={expanded.has(doc.id)}
                 onToggle={() => toggle(doc.id)}
                 onEdit={() => setEditing(doc)}
+                onDelete={(target) => setDeleting(target)}
               />
             ))}
           </div>
         )}
       </QueryState>
 
-      {editing && <MetadataModal doc={editing} onClose={() => setEditing(null)} />}
+      {editing && (
+        <MetadataModal
+          doc={editing}
+          onClose={() => setEditing(null)}
+          onDelete={() => {
+            setEditing(null);
+            setDeleting({ kind: 'document', id: editing.id });
+          }}
+        />
+      )}
+      {deleting && <DeleteLibraryDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
   );
 }
@@ -248,16 +262,19 @@ function DocumentCard({
   onToggle,
   onEdit,
   onOpenRuns,
+  onDelete,
 }: {
   doc: DocumentDto;
   open: boolean;
   onToggle: () => void;
   onEdit: () => void;
   onOpenRuns: () => void;
+  onDelete: (target: LibraryDeleteTarget) => void;
 }) {
   const t = useT();
   const labels = useLabels();
   const latest = doc.versions[0];
+  const name = documentDisplayName(doc.title, doc.docNumber);
   return (
     <div className="doc-card">
       <div className="doc-head">
@@ -267,6 +284,7 @@ function DocumentCard({
           onClick={onToggle}
           aria-expanded={open}
           aria-label={t.library.toggleVersions}
+          title={t.library.toggleVersions}
           style={{ padding: '0 4px' }}
         >
           <span className="doc-caret" aria-hidden="true">
@@ -297,9 +315,24 @@ function DocumentCard({
         <button type="button" className="btn btn-sm btn-ghost" onClick={onEdit}>
           {t.library.metadata}
         </button>
+        <DeleteLibraryButton
+          title={t.deleteLibrary.actionTitle.document(name)}
+          onClick={() => onDelete({ kind: 'document', id: doc.id })}
+        />
       </div>
 
-      {doc.lastRun ? <LastRunSummary stats={doc.lastRun} /> : <NoRunsYet />}
+      {/* Порожній стан каже, що робити далі: документ перевіряється лише в прогоні. */}
+      {doc.lastRun ? (
+        <LastRunSummary stats={doc.lastRun} />
+      ) : (
+        <NoRunsYet
+          action={
+            <Link className="btn btn-sm" to={`/runs?new=1&document=${doc.id}`} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
+              {t.docRuns.startRun}
+            </Link>
+          }
+        />
+      )}
 
       {open && (
         <div className="doc-versions">
@@ -307,9 +340,9 @@ function DocumentCard({
             <div className="ver-row dim">{t.library.noVersions}</div>
           ) : (
             doc.versions.map((v) => (
-              <div key={v.id} className="ver-row">
+              <div key={v.id} className="ver-row" style={{ gridTemplateColumns: '84px 1fr auto auto auto' }}>
                 <span className="ver-label">v{v.versionLabel}</span>
-                <span className="dim truncate mono xsmall" title={v.blobHash}>
+                <span className="dim truncate mono xsmall" title={`${t.library.versionHash}\n${v.blobHash}`}>
                   {v.blobHash.slice(0, 16)}…
                 </span>
                 <span className="dim xsmall nowrap">
@@ -322,6 +355,10 @@ function DocumentCard({
                 >
                   {t.library.effectiveFrom(formatDate(v.effectiveFrom))}
                 </span>
+                <DeleteLibraryButton
+                  title={t.deleteLibrary.actionTitle.documentVersion(`${name} v${v.versionLabel}`)}
+                  onClick={() => onDelete({ kind: 'documentVersion', id: v.id })}
+                />
               </div>
             ))
           )}
@@ -333,7 +370,16 @@ function DocumentCard({
 
 // ─── Редагування метаданих ───────────────────────────────────────────────────
 
-function MetadataModal({ doc, onClose }: { doc: DocumentDto; onClose: () => void }) {
+function MetadataModal({
+  doc,
+  onClose,
+  onDelete,
+}: {
+  doc: DocumentDto;
+  onClose: () => void;
+  /** Видалення — через те саме вікно з ціною, що й з картки. */
+  onDelete: () => void;
+}) {
   const t = useT();
   const labels = useLabels();
   const [title, setTitle] = useState(doc.title);
@@ -341,7 +387,6 @@ function MetadataModal({ doc, onClose }: { doc: DocumentDto; onClose: () => void
   const [processOwner, setProcessOwner] = useState(doc.processOwner ?? '');
   const [kind, setKind] = useState<DocumentKind | ''>(doc.kind ?? '');
   const update = useUpdateDocument();
-  const remove = useDeleteDocument();
 
   const save = () => {
     update.mutate(
@@ -368,15 +413,8 @@ function MetadataModal({ doc, onClose }: { doc: DocumentDto; onClose: () => void
       width={560}
       footer={
         <>
-          <button
-            type="button"
-            className="btn btn-danger"
-            onClick={() => {
-              if (!window.confirm(t.library.confirmDelete(doc.title))) return;
-              remove.mutate(doc.id, { onSuccess: onClose, onError: (e) => toast('error', e.message) });
-            }}
-          >
-            {t.common.delete}
+          <button type="button" className="btn btn-danger" onClick={onDelete}>
+            {t.deleteLibrary.action}
           </button>
           <span className="spacer" />
           <button type="button" className="btn" onClick={onClose}>

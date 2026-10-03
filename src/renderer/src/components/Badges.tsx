@@ -1,6 +1,14 @@
-import type { ClauseReviewStatus, Module, RunStatus, Severity, Verdict } from '@shared/domain';
+import type {
+  ClauseReviewStatus,
+  EvidenceSource,
+  MarkerLegendItem,
+  RunStatus,
+  Severity,
+  Verdict,
+} from '@shared/domain';
 import { useT } from '@renderer/i18n';
 import { VERDICT_GLYPH, useLabels } from '@renderer/lib/labels';
+import { markerTitle } from '@renderer/lib/markers';
 
 /**
  * Вердикт: колір + гліф + текст. Гліф обов'язковий — матриця покриття має
@@ -30,31 +38,54 @@ export function VerdictBadge({
   );
 }
 
-export function SeverityBadge({ severity, short = false }: { severity: Severity | null; short?: boolean }) {
+/**
+ * `potential` — критичність, яку модель ставить і вимогам «не розглянуто»
+ * («наскільки погано, якби цього не було ніде»). Це не зауваження до документа,
+ * тому бейдж приглушений, а title пояснює, чому.
+ */
+export function SeverityBadge({
+  severity,
+  short = false,
+  potential = false,
+}: {
+  severity: Severity | null;
+  short?: boolean;
+  potential?: boolean;
+}) {
+  const t = useT();
   const labels = useLabels();
   if (!severity) return <span className="dim">—</span>;
-  return (
-    <span className={`badge badge-s-${severity}`} title={labels.severity[severity]}>
+  const badge = (
+    <span
+      className={`badge badge-s-${severity}`}
+      title={potential ? t.findings.potentialSeverity(labels.severity[severity]) : labels.severity[severity]}
+    >
       {short ? labels.severityShort[severity] : labels.severity[severity]}
     </span>
   );
+  return potential ? <span className="severity-potential">{badge}</span> : badge;
 }
 
-/** Три позиції P/R/O завжди на місці: увімкнені яскраві, вимкнені приглушені. */
-export function ModuleBadges({ modules }: { modules: Module[] }) {
-  const t = useT();
-  const all: Module[] = ['P', 'R', 'O'];
+/**
+ * Позначки стандарту біля вимоги — лише ті, що стандарт справді надрукував
+ * (P / R / O у Tesco, «Major Must» у GlobalG.A.P.). Немає позначок — нічого
+ * не малюємо. Підказка — назва й пояснення з легенди самого стандарту.
+ */
+export function MarkerBadges({
+  markers,
+  legend,
+}: {
+  markers: readonly string[];
+  legend: readonly MarkerLegendItem[] | null | undefined;
+}) {
+  if (markers.length === 0) return null;
   return (
-    <span className="row" style={{ gap: 2 }}>
-      {all.map((m) => {
-        const on = modules.includes(m);
+    <span className="row marker-badges" style={{ gap: 2 }}>
+      {markers.map((code) => {
+        const title = markerTitle(code, legend);
         return (
-          <span
-            key={m}
-            className={`badge badge-module ${on ? `on on-${m}` : ''}`}
-            title={`${m} — ${t.labels.module[m]}${on ? '' : t.badges.outOfScopeSuffix}`}
-          >
-            {m}
+          <span key={code} className="badge badge-marker" title={title} role="img" aria-label={title}>
+            {code}
           </span>
         );
       })}
@@ -62,23 +93,46 @@ export function ModuleBadges({ modules }: { modules: Module[] }) {
   );
 }
 
-export function ModuleBadge({ module, on = true }: { module: Module; on?: boolean }) {
-  const labels = useLabels();
+/** Джерело цитати: Citations API провайдера (вигадати неможливо) чи текст, написаний моделлю. */
+export function EvidenceSourceTag({ source }: { source: EvidenceSource }) {
+  const t = useT();
+  const citations = source === 'citations_api';
   return (
-    <span className={`badge badge-module ${on ? `on on-${module}` : ''}`} title={labels.module[module]}>
-      {module}
+    <span
+      className="evidence-source"
+      title={citations ? t.findingDetail.sourceCitationsHint : t.findingDetail.sourceModelHint}
+    >
+      {citations ? t.evidenceViewer.sourceCitations : t.evidenceViewer.sourceModel}
     </span>
   );
 }
 
-export function RunStatusBadge({ status }: { status: RunStatus }) {
+/**
+ * Статус прогону. У title — не назва вдруге, а що він означає і що робити далі
+ * («Призупинено — нічого не втрачено…»); `detail` — напр. текст помилки прогону.
+ */
+export function RunStatusBadge({ status, detail }: { status: RunStatus; detail?: string | null }) {
+  const t = useT();
   const labels = useLabels();
-  return <span className={`badge badge-status st-${status}`}>{labels.runStatus[status]}</span>;
+  const hint = t.badges.runStatusHint[status];
+  return (
+    <span className={`badge badge-status st-${status}`} title={detail ? `${hint}\n${detail}` : hint}>
+      {labels.runStatus[status]}
+    </span>
+  );
 }
 
+/** Крапка статусу вичитки: колір без підпису, тому назва — і в title, і для скрінрідера. */
 export function ReviewStatusDot({ status }: { status: ClauseReviewStatus }) {
   const labels = useLabels();
-  return <span className={`rs-dot rs-${status}`} title={labels.clauseReview[status]} />;
+  return (
+    <span
+      className={`rs-dot rs-${status}`}
+      title={labels.clauseReview[status]}
+      role="img"
+      aria-label={labels.clauseReview[status]}
+    />
+  );
 }
 
 export function VerifiedBadge({ verified }: { verified: boolean }) {

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 
 import { SEVERITIES, type DocumentRunStats, type Severity } from '@shared/domain';
 import { RunStatusBadge } from '@renderer/components/Badges';
+import { Labeled } from '@renderer/components/InfoTip';
 import { useT } from '@renderer/i18n';
 import { formatDateTime, formatPercent } from '@renderer/lib/format';
 import { useLabels } from '@renderer/lib/labels';
@@ -24,11 +25,15 @@ export function SeverityChips({ counts }: { counts: Record<Severity, number> }) 
 
   return (
     <span className="row" style={{ gap: 4 }}>
-      {present.map((s) => (
-        <span key={s} className={`badge badge-s-${s}`} title={labels.severity[s]}>
-          {labels.severityShort[s]} {counts[s]}
-        </span>
-      ))}
+      {present.map((s) => {
+        // «MAJ 3» читається лише тим, хто знає скорочення; повна назва — у title й для скрінрідера.
+        const full = t.runStats.chipLabel(labels.severity[s], counts[s]);
+        return (
+          <span key={s} className={`badge badge-s-${s}`} title={full} aria-label={full}>
+            {labels.severityShort[s]} {counts[s]}
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -38,29 +43,33 @@ export function RunStatsFigures({ stats }: { stats: DocumentRunStats }) {
   const t = useT();
   return (
     <div className="runstats-figures">
-      <div className="runstat" title={t.runStats.relevantHint}>
-        <span className="runstat-label">{t.runStats.relevant}</span>
+      <div className="runstat">
+        <Labeled className="runstat-label" label={t.runStats.relevant} hint={t.runStats.relevantHint} />
         <span className="runstat-value tabnum">
           {stats.relevant}
           <span className="runstat-of"> / {stats.assessed}</span>
         </span>
-        <span className="runstat-sub">{formatPercent(stats.relevant, stats.assessed)}</span>
+        <span className="runstat-sub">
+          {t.runStats.relevantSub(formatPercent(stats.relevant, stats.assessed))}
+        </span>
       </div>
 
-      <div className="runstat" title={t.runStats.issuesHint}>
-        <span className="runstat-label">{t.runStats.issues}</span>
+      <div className="runstat">
+        <Labeled className="runstat-label" label={t.runStats.issues} hint={t.runStats.issuesHint} />
         <span className="runstat-chips">
           <SeverityChips counts={stats.severityCounts} />
         </span>
       </div>
 
       <div className="runstat">
-        <span className="runstat-label">{t.runStats.reviewed}</span>
+        <Labeled className="runstat-label" label={t.runStats.reviewed} hint={t.runStats.reviewedHint} />
         <span className="runstat-value tabnum">
           {stats.reviewed}
           <span className="runstat-of"> / {stats.assessed}</span>
         </span>
-        <span className="runstat-sub">{formatPercent(stats.reviewed, stats.assessed)}</span>
+        <span className="runstat-sub">
+          {t.runStats.reviewedSub(formatPercent(stats.reviewed, stats.assessed))}
+        </span>
       </div>
     </div>
   );

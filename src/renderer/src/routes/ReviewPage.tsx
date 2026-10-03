@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 
 import { SEVERITIES, VERDICTS, type FindingDto, type Severity, type Verdict } from '@shared/domain';
-import { SeverityBadge, VerdictBadge, VerifiedBadge } from '@renderer/components/Badges';
+import { EvidenceSourceTag, SeverityBadge, VerdictBadge, VerifiedBadge } from '@renderer/components/Badges';
+import { InfoTip, Labeled } from '@renderer/components/InfoTip';
 import { KeyboardHint, Kbd } from '@renderer/components/KeyboardHint';
 import { ProgressBar } from '@renderer/components/Meters';
 import { EmptyState, ErrorState, LoadingState } from '@renderer/components/States';
@@ -11,7 +12,7 @@ import { useFindings, useReviewFinding } from '@renderer/hooks/useFindings';
 import { useHotkeys } from '@renderer/hooks/useHotkeys';
 import { getMessages, useT } from '@renderer/i18n';
 import { formatConfidence } from '@renderer/lib/format';
-import { useLabels } from '@renderer/lib/labels';
+import { isPotentialSeverity, useLabels } from '@renderer/lib/labels';
 import { usePageContext } from '@renderer/store/topbar';
 import { toast } from '@renderer/store/ui';
 
@@ -133,18 +134,24 @@ export function ReviewPage() {
           {current.clause.topic ?? ''}
         </span>
         <VerdictBadge verdict={current.verdict} />
-        <SeverityBadge severity={current.severity} />
-        <span className="dim xsmall">{t.review.confidence(formatConfidence(current.confidence))}</span>
+        {current.severity && (
+          <SeverityBadge severity={current.severity} potential={isPotentialSeverity(current.verdict)} />
+        )}
+        <span className="dim xsmall labeled">
+          {t.review.confidence(formatConfidence(current.confidence))}
+          <InfoTip about={t.findings.colConfidence}>{t.findings.colConfidenceHint}</InfoTip>
+        </span>
         <span className="spacer" />
-        <div style={{ minWidth: 200 }}>
+        <div style={{ minWidth: 240 }}>
           <ProgressBar
             value={reviewedCount}
             max={items.length}
             tone="ok"
             label={t.review.progressLabel(reviewedCount, items.length)}
-            right={`${cursor + 1} / ${items.length}`}
+            right={t.review.position(cursor + 1, items.length)}
           />
         </div>
+        <InfoTip about={t.review.crumb}>{t.review.howTo}</InfoTip>
       </div>
 
       <div className="review-body">
@@ -186,15 +193,22 @@ export function ReviewPage() {
       </div>
 
       <div className="review-foot row wrap">
-        <button type="button" className="btn btn-primary" onClick={accept} disabled={review.isPending}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          title={t.review.acceptTitle}
+          onClick={accept}
+          disabled={review.isPending}
+        >
           <Kbd>A</Kbd> {t.review.accept}
         </button>
-        <button type="button" className="btn btn-danger" onClick={() => setMode('reject')}>
+        <button type="button" className="btn btn-danger" title={t.review.rejectTitle} onClick={() => setMode('reject')}>
           <Kbd>R</Kbd> {t.review.reject}
         </button>
         <button
           type="button"
           className="btn"
+          title={t.review.editTitle}
           onClick={() => {
             setMode('edit');
             window.setTimeout(() => noteRef.current?.focus(), 0);
@@ -237,6 +251,14 @@ function ReviewCard({ finding }: { finding: FindingDto }) {
             <p className="pre-wrap">{finding.gap}</p>
           </div>
         )}
+        {finding.outsideEvidence && (
+          <div className="block">
+            <div className="block-label">
+              <Labeled label={t.review.outsideEvidence} hint={t.findingDetail.outsideEvidenceHint} />
+            </div>
+            <p className="pre-wrap outside-evidence">{finding.outsideEvidence}</p>
+          </div>
+        )}
         {finding.recommendation && (
           <div className="block">
             <div className="block-label">{t.review.recommendation}</div>
@@ -255,17 +277,20 @@ function ReviewCard({ finding }: { finding: FindingDto }) {
       </div>
 
       <div>
-        <div className="block-label">{t.review.evidence}</div>
+        <div className="block-label">
+          <Labeled label={t.review.evidence} hint={t.findingDetail.evidenceHint} />
+        </div>
         {finding.evidence.length === 0 ? (
           <div className="callout callout-warn">{t.review.noEvidence}</div>
         ) : (
           finding.evidence.map((e) => (
             <div key={e.id} className="evidence">
               <div className="evidence-head">
-                <span className="dim">
+                <span className="dim nowrap">
                   {t.review.pageShort} {e.pageNo ?? '—'}
                 </span>
                 <span className="spacer" />
+                <EvidenceSourceTag source={e.source} />
                 <VerifiedBadge verified={e.verified} />
               </div>
               <div className="evidence-quote" style={{ cursor: 'default' }}>

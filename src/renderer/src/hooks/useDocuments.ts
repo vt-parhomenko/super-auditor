@@ -38,14 +38,6 @@ export function useUpdateDocument() {
   });
 }
 
-export function useDeleteDocument() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (documentId: number) => api['documents:delete'](documentId),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['documents'] }),
-  });
-}
-
 export function usePickFiles() {
   return useMutation({
     mutationFn: (kind: 'document' | 'specification') => api['import:pick'](kind),

@@ -31,9 +31,22 @@ export type ModelVerdict = (typeof MODEL_VERDICTS)[number];
 export const SEVERITIES = ['critical', 'major', 'minor', 'recommendation'] as const;
 export type Severity = (typeof SEVERITIES)[number];
 
-/** Модулі застосовності стандарту Tesco: Product / Responsible sourcing / Operational. */
+/**
+ * Застаріле: прапорці P/R/O стандарту Tesco, колись прочитані як «модулі
+ * застосовності». Насправді це тип доказу (політика / записи / огляд), і їх
+ * заступили позначки стандарту (`ClauseDto.markers`). Лишаються лише для
+ * прихованих профілів виробництва, які ще чекають переосмислення.
+ */
 export const MODULES = ['P', 'R', 'O'] as const;
 export type Module = (typeof MODULES)[number];
+
+/**
+ * Межі позначок стандарту біля вимоги. Позначка — короткий код («P»,
+ * «Major Must», «Fundamental»); довший рядок — це вже не позначка, а шматок
+ * тексту вимоги, що потрапив не в те поле.
+ */
+export const MARKER_MAX_COUNT = 8;
+export const MARKER_MAX_LENGTH = 40;
 
 export const OBLIGATIONS = ['must', 'should', 'may'] as const;
 export type Obligation = (typeof OBLIGATIONS)[number];
@@ -245,6 +258,25 @@ export interface SpecVersionDto {
   clausesStatus: ClausesStatus;
   clauseCount: number;
   reviewedClauseCount: number;
+  /**
+   * Розшифровка позначок біля вимог — власними словами стандарту.
+   * null — стандарт позначок не має або їхньої легенди не знайдено.
+   */
+  markerLegend: MarkerLegendItem[] | null;
+}
+
+/**
+ * Один пункт легенди позначок стандарту. Береться з самого стандарту (Tesco,
+ * стор. 10 «Clause Layout»: «P — the site must have a documented policy…»),
+ * мовою стандарту, — а не вигадується застосунком чи моделлю.
+ */
+export interface MarkerLegendItem {
+  /** Позначка так, як вона надрукована біля вимоги: 'P', 'Major Must', 'Fundamental'. */
+  code: string;
+  /** Коротка назва зі стандарту: 'Policy / procedure'. Якщо назви немає — сам код. */
+  label: string;
+  /** Пояснення стандарту майже дослівно; null — стандарт позначку не пояснює. */
+  meaning: string | null;
 }
 
 export interface ClauseDto {
@@ -257,7 +289,14 @@ export interface ClauseDto {
   sectionTitle: string | null; // 'Pest management'
   topic: string | null;
   requirementText: string;
+  /** Застаріле, лише для прихованих профілів виробництва. Див. `MODULES`. */
   modules: Module[];
+  /**
+   * Позначки, які стандарт друкує біля цієї вимоги, дослівно: ['P','R'],
+   * ['Major Must'], ['Fundamental']. [] — позначок немає. Розшифровка —
+   * у `SpecVersionDto.markerLegend`.
+   */
+  markers: string[];
   obligation: Obligation | null;
   pageFrom: number | null;
   pageTo: number | null;
@@ -274,6 +313,7 @@ export interface ClausePatch {
   topic?: string | null;
   requirementText?: string;
   modules?: Module[];
+  markers?: string[];
   obligation?: Obligation | null;
   reviewStatus?: ClauseReviewStatus;
 }
@@ -352,6 +392,54 @@ export interface ModelRef {
   effort?: Effort;
 }
 
+/** Провайдер вбудованої маршрутизації: один ключ — і доступні моделі всіх розробників. */
+export const DEFAULT_PROVIDER = 'openrouter';
+
+/**
+ * Типова модель кожного етапу в кожного провайдера. Потрібна, коли вибрано
+ * лише провайдера: «Anthropic, модель за замовчуванням» для судження має
+ * означати Opus, а не одну модель провайдера на всі етапи. Розподіл той самий
+ * усюди: Sonnet будує реєстр, Haiku профілює документи, Opus 5.5 судить і критикує.
+ *
+ * Sonnet 5.5 — лише через OpenRouter: id прямого API Anthropic для нього ще не
+ * підтверджений (вгаданий id дав би «модель не знайдено»), тож напряму — Sonnet 5.
+ */
+export const STAGE_MODEL_DEFAULTS: Readonly<Record<string, Readonly<Record<Stage, string>>>> = {
+  openrouter: {
+    clause_extract: 'anthropic/claude-sonnet-5.5',
+    spec_summary: 'anthropic/claude-sonnet-5.5',
+    doc_profile: 'anthropic/claude-haiku-4.5',
+    judge: 'anthropic/claude-opus-5.5',
+    critic: 'anthropic/claude-opus-5.5',
+  },
+  anthropic: {
+    clause_extract: 'claude-sonnet-5',
+    spec_summary: 'claude-sonnet-5',
+    doc_profile: 'claude-haiku-4-5',
+    judge: 'claude-opus-5-5',
+    critic: 'claude-opus-5-5',
+  },
+};
+
+/** Типова модель етапу в провайдера; null — для провайдера типових моделей немає. */
+export function stageDefaultModel(providerId: string, stage: Stage): string | null {
+  return STAGE_MODEL_DEFAULTS[providerId]?.[stage] ?? null;
+}
+
+/**
+ * Маршрутизація за замовчуванням. Переозначається через `AppSettings.routing`
+ * і конфігурацію прогону. Тут, а не в main, — щоб інтерфейс показував ті самі
+ * моделі, якими реально піде робота, а не «за замовчуванням».
+ */
+export const DEFAULT_ROUTING: Record<Stage, ModelRef> = {
+  clause_extract: { provider: DEFAULT_PROVIDER, model: 'anthropic/claude-sonnet-5.5', effort: 'medium' },
+  spec_summary: { provider: DEFAULT_PROVIDER, model: 'anthropic/claude-sonnet-5.5', effort: 'medium' },
+  doc_profile: { provider: DEFAULT_PROVIDER, model: 'anthropic/claude-haiku-4.5' },
+  // Opus 5.5 за замовчуванням думає на medium — для судження ставимо high явно.
+  judge: { provider: DEFAULT_PROVIDER, model: 'anthropic/claude-opus-5.5', effort: 'high' },
+  critic: { provider: DEFAULT_PROVIDER, model: 'anthropic/claude-opus-5.5', effort: 'high' },
+};
+
 export interface AuditRunDto {
   id: number;
   label: string | null;
@@ -414,6 +502,13 @@ export interface FindingDto {
   rationale: string;
   gap: string | null;
   recommendation: string | null;
+  /**
+   * Що аудитор має перевірити ПОЗА документом — записи, огляд на місці, — бо
+   * так каже легенда позначок стандарту (Tesco: R — записи, O — огляд). Це не
+   * зауваження до документа: документ цього довести не може за природою.
+   * null — нічого (стандарт без позначок або прогін до `judge.v2`).
+   */
+  outsideEvidence: string | null;
   createdAt: IsoDate;
   evidence: EvidenceDto[];
   review: HumanReviewDto | null;
@@ -562,15 +657,68 @@ export interface ImportResult {
 /**
  * Ключ сортування вимог: '10.3' → '010.003', '1.12' → '001.012'.
  * Потрібен, бо лексикографічно '10.3' < '2.1', що ламає порядок у UI.
+ *
+ * Номери не лише числові: 'A.5.1' (додаток ISO 27001) → 'A.005.001',
+ * 'AF 1.2.3' (GlobalG.A.P.) → 'AF 001.002.003'. Кожна група цифр
+ * доповнюється нулями окремо — інакше 'AF 10' стояло б між 'AF 1' і 'AF 2'.
+ * Літери не доповнюються: так розділи додатків ('A.…') ідуть після числових.
  */
 export function clauseSortKey(clauseNo: string): string {
   return clauseNo
+    .trim()
     .split('.')
     .map((part) => {
-      const num = parseInt(part, 10);
-      return Number.isNaN(num) ? part.padStart(3, '0') : String(num).padStart(3, '0');
+      const trimmed = part.trim();
+      if (/^\d+$/.test(trimmed)) return String(parseInt(trimmed, 10)).padStart(3, '0');
+      return trimmed.replace(/\d+/g, (digits) => String(parseInt(digits, 10)).padStart(3, '0'));
     })
     .join('.');
+}
+
+/**
+ * Нормалізація позначок вимоги: обрізані пробіли, без порожніх, без дублів
+ * (порядок першої появи зберігається), не довші за `MARKER_MAX_LENGTH`
+ * і не більше `MARKER_MAX_COUNT`. Сміття (не рядки) відкидається.
+ *
+ * Однакова для відповіді моделі, БД і поля вводу в UI — щоб «P» і « P »
+ * ніде не стали двома різними позначками.
+ */
+export function normalizeMarkers(values: readonly unknown[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const marker = value.replace(/\s+/g, ' ').trim();
+    if (marker.length === 0 || marker.length > MARKER_MAX_LENGTH) continue;
+    if (out.includes(marker)) continue;
+    out.push(marker);
+    if (out.length >= MARKER_MAX_COUNT) break;
+  }
+  return out;
+}
+
+/**
+ * Ключ порівняння позначок: без різниці в регістрі й пробілах — модель могла
+ * написати «MAJOR MUST», а в реєстрі стоїть «Major Must».
+ */
+export function markerKey(code: string): string {
+  return code.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * Пункти легенди, що пояснюють позначки ОДНІЄЇ вимоги, у порядку її позначок.
+ * Позначки, яких легенда не знає, пропускаються: вигадувати їм значення не можна.
+ */
+export function legendEntriesFor(
+  markers: readonly string[],
+  legend: readonly MarkerLegendItem[] | null | undefined,
+): MarkerLegendItem[] {
+  if (!legend || legend.length === 0) return [];
+  const out: MarkerLegendItem[] = [];
+  for (const code of markers) {
+    const item = legend.find((entry) => markerKey(entry.code) === markerKey(code));
+    if (item && !out.includes(item)) out.push(item);
+  }
+  return out;
 }
 
 /** Порядок «поганості» вердикту для агрегації в клітинці матриці покриття. */

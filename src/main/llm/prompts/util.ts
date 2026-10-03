@@ -6,7 +6,7 @@
  * кешований префікс і в ключ кешу (architecture.md §9).
  */
 
-import { isLanguage, type Language } from '@shared/domain';
+import { isLanguage, type Language, type MarkerLegendItem } from '@shared/domain';
 
 /** Екранування значення атрибута XML-подібного тега. */
 export function attr(value: string | number | null | undefined): string {
@@ -40,6 +40,44 @@ export function joinBlocks(...blocks: Array<string | null | undefined>): string 
   return blocks
     .filter((block): block is string => typeof block === 'string' && block.trim().length > 0)
     .join('\n\n');
+}
+
+// ─── Позначки стандарту ──────────────────────────────────────────────────────
+
+/**
+ * Атрибут `markers="P, R"` для тега вимоги. Позначок немає — `undefined`, і
+ * `openTag` атрибут просто пропускає: промпт стандарту без позначок не має
+ * ні порожнього `markers=""`, ні згадки про них.
+ */
+export function markersAttr(markers: readonly string[] | null | undefined): string | undefined {
+  return markers && markers.length > 0 ? markers.join(', ') : undefined;
+}
+
+/**
+ * Блок `<marker_legend>` — пояснення позначок словами самого стандарту.
+ * Порожня легенда — `null` (блоку немає взагалі). Позначка без пояснення
+ * лишається в блоці з явним «не пояснено»: модель має знати, що значення
+ * невідоме, а не вгадувати його з коду.
+ */
+export function markerLegendBlock(legend: readonly MarkerLegendItem[] | null | undefined): string | null {
+  if (!legend || legend.length === 0) return null;
+  const items = legend.map((item) =>
+    tag(
+      'marker',
+      // Назва, що дублює код («P» — «P»), нічого не додає.
+      { code: item.code, label: item.label && item.label !== item.code ? item.label : undefined },
+      item.meaning ?? '(The standard does not explain this marker.)',
+    ),
+  );
+  return tag('marker_legend', { count: legend.length }, items.join('\n'));
+}
+
+/** Канонічна легенда для `cacheInput`: зміна будь-якого слова легенди — інший ключ. */
+export function markerLegendKey(
+  legend: readonly MarkerLegendItem[] | null | undefined,
+): Array<{ code: string; label: string; meaning: string | null }> | null {
+  if (!legend || legend.length === 0) return null;
+  return legend.map((item) => ({ code: item.code, label: item.label, meaning: item.meaning }));
 }
 
 /** Обрізає довгий текст із явною позначкою — щоб модель знала, що це не кінець. */

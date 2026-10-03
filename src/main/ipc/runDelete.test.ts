@@ -125,7 +125,7 @@ describe('runs:delete', () => {
         () => null,
         (err: unknown) => err as IpcError,
       );
-    expect(error?.localize('uk')).toBe('Прогін 99999 не знайдено');
+    expect(error?.localize('uk')).toBe('Перевірку 99999 не знайдено');
   });
 
   it('картки документів оновлюються після видалення', async () => {

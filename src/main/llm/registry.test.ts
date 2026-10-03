@@ -14,13 +14,13 @@ import { clauseExtractInput } from './__fixtures__/samples';
 const keys = (map: Record<string, string>) => (id: string) => map[id] ?? null;
 
 describe('DEFAULT_ROUTING', () => {
-  it('відповідає architecture.md §7', () => {
+  it('за замовчуванням усе через OpenRouter: Sonnet 5.5 / Haiku 4.5 / Opus 5.5 (architecture.md §7)', () => {
     expect(DEFAULT_ROUTING).toEqual({
-      clause_extract: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-      spec_summary: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-      doc_profile: { provider: 'anthropic', model: 'claude-haiku-4-5' },
-      judge: { provider: 'anthropic', model: 'claude-opus-5', effort: 'high' },
-      critic: { provider: 'anthropic', model: 'claude-opus-5', effort: 'high' },
+      clause_extract: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', effort: 'medium' },
+      spec_summary: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', effort: 'medium' },
+      doc_profile: { provider: 'openrouter', model: 'anthropic/claude-haiku-4.5' },
+      judge: { provider: 'openrouter', model: 'anthropic/claude-opus-5.5', effort: 'high' },
+      critic: { provider: 'openrouter', model: 'anthropic/claude-opus-5.5', effort: 'high' },
     });
   });
 
@@ -36,20 +36,26 @@ describe('DEFAULT_ROUTING', () => {
     expect(resolveRouting('critic', settings)).toEqual(DEFAULT_ROUTING.critic);
   });
 
-  it('інший провайдер без моделі → модель за замовчуванням ЦЬОГО провайдера, не id Anthropic', () => {
-    const settings = { routing: { judge: { provider: 'openrouter', model: '' } } } as Pick<AppSettings, 'routing'>;
-    expect(resolveRouting('judge', settings, null, (id) => (id === 'openrouter' ? 'anthropic/claude-sonnet-5' : null))).toEqual({
-      provider: 'openrouter',
-      model: 'anthropic/claude-sonnet-5',
-      effort: 'high',
-    });
-    // Без довідника моделей — порожньо, а не `claude-opus-5` під OpenRouter.
-    expect(resolveRouting('judge', settings).model).toBe('');
+  it('провайдер без моделі → типова модель ЕТАПУ саме в цього провайдера', () => {
+    const anthropic = { routing: { judge: { provider: 'anthropic', model: '' } } } as Pick<AppSettings, 'routing'>;
+    expect(resolveRouting('judge', anthropic)).toEqual({ provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' });
+
+    const profile = { routing: { doc_profile: { provider: 'anthropic', model: '  ' } } } as Pick<AppSettings, 'routing'>;
+    expect(resolveRouting('doc_profile', profile)).toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5' });
+
+    const openrouter = { routing: { clause_extract: { provider: 'openrouter', model: '' } } } as Pick<AppSettings, 'routing'>;
+    expect(resolveRouting('clause_extract', openrouter).model).toBe('anthropic/claude-sonnet-5.5');
   });
 
-  it('той самий провайдер без моделі → модель етапу за замовчуванням', () => {
-    const settings = { routing: { doc_profile: { provider: 'anthropic', model: '  ' } } } as Pick<AppSettings, 'routing'>;
-    expect(resolveRouting('doc_profile', settings)).toEqual({ provider: 'anthropic', model: 'claude-haiku-4-5' });
+  it('провайдер без типових моделей етапів → його модель за замовчуванням, не чужий id', () => {
+    const settings = { routing: { judge: { provider: 'ollama', model: '' } } } as Pick<AppSettings, 'routing'>;
+    expect(resolveRouting('judge', settings, null, (id) => (id === 'ollama' ? 'qwen3:14b' : null))).toEqual({
+      provider: 'ollama',
+      model: 'qwen3:14b',
+      effort: 'high',
+    });
+    // Без довідника моделей — порожньо, а не id OpenRouter під локальним сервером.
+    expect(resolveRouting('judge', settings).model).toBe('');
   });
 
   it('невалідний effort відкидається; порожній effort — «за замовчуванням моделі»', () => {
@@ -183,7 +189,8 @@ describe('ProviderRegistry', () => {
     const anthropic = statuses.find((status) => status.id === 'anthropic');
     const ollama = statuses.find((status) => status.id === 'ollama');
 
-    expect(statuses.map((status) => status.id)).toEqual(['anthropic', 'openrouter', 'ollama']);
+    // Першим — провайдер маршрутизації за замовчуванням: так їх показують Налаштування.
+    expect(statuses.map((status) => status.id)).toEqual(['openrouter', 'anthropic', 'ollama']);
     expect(anthropic).toMatchObject({
       configured: true,
       cloud: true,
@@ -258,28 +265,32 @@ describe('ProviderRegistry', () => {
     expect(anthropic?.error).toBeTruthy();
   });
 
-  it('resolveProvider віддає провайдера і ModelRef етапу', () => {
-    const resolved = build({ anthropic: 'sk-test' }).resolveProvider('judge');
-    expect(resolved.provider.id).toBe('anthropic');
-    expect(resolved.model).toEqual({ provider: 'anthropic', model: 'claude-opus-5', effort: 'high' });
+  it('resolveProvider віддає провайдера і ModelRef етапу — за замовчуванням OpenRouter + Opus 5.5', () => {
+    const resolved = build({ openrouter: 'sk-or' }).resolveProvider('judge');
+    expect(resolved.provider.id).toBe('openrouter');
+    expect(resolved.model).toEqual({ provider: 'openrouter', model: 'anthropic/claude-opus-5.5', effort: 'high' });
+  });
+
+  it('за замовчуванням без ключа OpenRouter — зрозуміле «не налаштовано», навіть якщо є ключ Anthropic', () => {
+    expect(() => build({ anthropic: 'sk-test' }).resolveProvider('judge')).toThrow(LlmNotConfiguredError);
   });
 
   it('провайдер привʼязаний до моделі етапу: models[0] — маршрутизована модель, а не перша в списку', () => {
     const registry = build({ anthropic: 'sk-test' });
     // Раніше профіль документа йшов на перший id провайдера (Opus) замість Haiku.
-    const profiler = registry.resolveProvider('doc_profile');
+    const profiler = registry.resolveProvider('doc_profile', { routing: { doc_profile: { provider: 'anthropic', model: '' } } });
     expect(profiler.provider.models).toEqual(['claude-haiku-4-5']);
     expect(profiler.provider.id).toBe('anthropic');
     expect(profiler.provider.pricingFor?.('claude-haiku-4-5')?.inputPerMTok).toBe(1);
   });
 
-  it('провайдер без моделі в маршрутизації отримує СВОЮ модель за замовчуванням', () => {
+  it('провайдер без моделі в маршрутизації отримує СВОЮ типову модель етапу', () => {
     const registry = build({ openrouter: 'sk-or' });
     const resolved = registry.resolveProvider('judge', {
       routing: { judge: { provider: 'openrouter', model: '' } },
     });
-    expect(resolved.model).toEqual({ provider: 'openrouter', model: 'anthropic/claude-sonnet-5', effort: 'high' });
-    expect(resolved.provider.models).toEqual(['anthropic/claude-sonnet-5']);
+    expect(resolved.model).toEqual({ provider: 'openrouter', model: 'anthropic/claude-opus-5.5', effort: 'high' });
+    expect(resolved.provider.models).toEqual(['anthropic/claude-opus-5.5']);
   });
 
   it('конфігурація прогону перекриває Налаштування', () => {

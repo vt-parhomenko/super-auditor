@@ -4,10 +4,20 @@
  * `sortKey` і `textHash` тут ПОХІДНІ: репозиторій перераховує їх сам при кожній
  * зміні `clauseNo`/`requirementText`. Інакше після ручної правки в UI діф версій
  * спеки почне брехати, а сортування розсиплеться.
+ *
+ * Позначки стандарту (`markers`) до `textHash` не входять: діф версій порівнює
+ * текст вимог, а не те, як їх класифіковано.
  */
 
 import { createHash } from 'node:crypto';
-import { clauseSortKey, type ClauseDto, type ClausePatch, type Module, type Obligation } from '@shared/domain';
+import {
+  clauseSortKey,
+  normalizeMarkers,
+  type ClauseDto,
+  type ClausePatch,
+  type Module,
+  type Obligation,
+} from '@shared/domain';
 import { toClauseDto, toJson, type ClauseRow } from '../mappers';
 import { BaseRepo, toId, type SqliteDb } from '../types';
 
@@ -18,6 +28,8 @@ export interface ClauseInput {
   sectionTitle?: string | null;
   topic?: string | null;
   modules?: Module[];
+  /** Позначки стандарту біля вимоги, дослівно. Нормалізуються перед записом. */
+  markers?: readonly string[];
   obligation?: Obligation | null;
   pageFrom?: number | null;
   pageTo?: number | null;
@@ -113,6 +125,7 @@ export class ClausesRepo extends BaseRepo {
       input.topic ?? null,
       input.requirementText,
       toJson(input.modules ?? []),
+      toJson(normalizeMarkers(input.markers ?? [])),
       input.obligation ?? null,
       input.pageFrom ?? null,
       input.pageTo ?? null,
@@ -138,6 +151,7 @@ export class ClausesRepo extends BaseRepo {
           input.topic ?? null,
           input.requirementText,
           toJson(input.modules ?? []),
+          toJson(normalizeMarkers(input.markers ?? [])),
           input.obligation ?? null,
           input.pageFrom ?? null,
           input.pageTo ?? null,
@@ -182,6 +196,10 @@ export class ClausesRepo extends BaseRepo {
     if (patch.modules !== undefined) {
       sets.push('modules = ?');
       params.push(toJson(patch.modules));
+    }
+    if (patch.markers !== undefined) {
+      sets.push('markers = ?');
+      params.push(toJson(normalizeMarkers(patch.markers)));
     }
     if (patch.obligation !== undefined) {
       sets.push('obligation = ?');
@@ -332,8 +350,8 @@ export class ClausesRepo extends BaseRepo {
     return this.stmt(
       `INSERT INTO clause
          (spec_version_id, clause_no, sort_key, section_no, section_title, topic,
-          requirement_text, modules, obligation, page_from, page_to, text_hash, review_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          requirement_text, modules, markers, obligation, page_from, page_to, text_hash, review_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
   }
 }

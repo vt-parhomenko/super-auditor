@@ -93,8 +93,10 @@ describe('registerIpcHandlers', () => {
     // 49 базових + `blob:read` (PDF-вьювер) + `documents:runs`, `usage:spend`,
     // `usage:recent` (прогони в розрізі файлу та облік витрат) + `runs:delete`
     // + `providers:refreshModels`, `providers:balance`, `providers:setManagementKey`,
-    // `providers:clearManagementKey` (живі каталоги й баланс OpenRouter).
-    expect(IPC_CHANNELS).toHaveLength(58);
+    // `providers:clearManagementKey` (живі каталоги й баланс OpenRouter)
+    // − `documents:delete` + `library:deleteImpact`, `library:delete` (видалення
+    // специфікацій і документів разом із перевірками).
+    expect(IPC_CHANNELS).toHaveLength(59);
 
     ipc.dispose();
   });

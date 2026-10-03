@@ -20,6 +20,7 @@ import {
   LlmCloudBlockedError,
   LlmError,
   LlmNotConfiguredError,
+  PROMPT_VERSIONS,
   getPricing,
   resolveRouting,
   type CompleteRequest,
@@ -273,9 +274,11 @@ describe('estimateRun', () => {
 
   it('невідомий провайдер у маршрутизації — модель судження за замовчуванням не зникає', async () => {
     const estimate = await orchestrator({}).estimateRun(runConfig());
-    // Маршрутизації немає → типовий judge; провайдера в реєстрі немає → ціна з таблиці.
-    expect(estimate.model).toBe('claude-opus-5');
-    expect(estimate.costUsd).toBeCloseTo(expectedCost(estimate.inputTokens, getPricing('claude-opus-5')!), 4);
+    // Маршрутизації немає → типовий judge (OpenRouter + Opus 5.5). Провайдера в
+    // цьому реєстрі немає, а вбудована таблиця знає лише id Anthropic → ціна
+    // невідома, і оцінка чесно каже про це замість вигаданої суми.
+    expect(estimate.model).toBe('anthropic/claude-opus-5.5');
+    expect(estimate.costUsd).toBeNull();
   });
 });
 
@@ -333,6 +336,21 @@ describe('resumeRun', () => {
 
     expect(beta.calls).toBeGreaterThan(0);
     expect(beta.requests.every((r) => r.model === 'beta-judge')).toBe(true);
+  });
+});
+
+describe('версія промпта прогону', () => {
+  it('startRun записує поточну версію судження, а не зашитий літерал', async () => {
+    fixture.db.settings.set({ routing: { judge: { provider: 'alpha', model: 'alpha-judge' } } });
+    const alpha = fakeProvider('alpha');
+    const events = recorder();
+    const finished = events.finished();
+    const runId = await orchestrator({ alpha }, events).startRun(runConfig());
+    await finished;
+
+    expect(fixture.db.runs.get(runId)?.promptVersion).toBe(PROMPT_VERSIONS.judge);
+    expect(PROMPT_VERSIONS.judge).toBe('judge.v2');
+    expect(alpha.requests.every((r) => r.promptVersion === 'judge.v2')).toBe(true);
   });
 });
 
@@ -415,6 +433,72 @@ describe('експорт Markdown', () => {
     expect(markdown).toContain('> Pest management programme is documented');
   });
 
+  it('«перевірити поза документом» — і в невідповідностях, і окремим розділом для решти', async () => {
+    fixture.db.settings.set({ resultsLanguage: 'nl' });
+    const { runId } = planRun(fixture.db, runConfig(), {
+      judge: 'claude-opus-5',
+      critic: null,
+      promptVersion: 'judge.v2',
+    });
+    fixture.db.findings.upsert({
+      runId,
+      clauseId: fixture.clauseIds['10.1']!,
+      documentVersionId: fixture.pestVersionId,
+      verdict: 'partial',
+      severity: 'minor',
+      rationale: 'Frequentie ontbreekt.',
+      gap: 'Geen inspectiefrequentie.',
+      outsideEvidence: 'Bezoekrapporten van de bestrijder inzien.',
+    });
+    fixture.db.findings.upsert({
+      runId,
+      clauseId: fixture.clauseIds['10.2']!,
+      documentVersionId: fixture.pestVersionId,
+      verdict: 'compliant',
+      rationale: 'Procedure volledig.',
+      outsideEvidence: 'Lokaasstations op de locatie bekijken.',
+    });
+    fixture.db.findings.upsert({
+      runId,
+      clauseId: fixture.clauseIds['10.3']!,
+      documentVersionId: fixture.pestVersionId,
+      verdict: 'compliant',
+      rationale: 'Niets buiten het document.',
+    });
+
+    const orch = orchestrator({});
+    const markdown = readFileSync((await orch.exportRun(runId, 'markdown')).path, 'utf8');
+    const m = mainMessages('nl').export;
+
+    expect(markdown).toContain(`**${m.outsideEvidenceLabel}:** Bezoekrapporten van de bestrijder inzien.`);
+    expect(markdown).toContain(`## ${m.outsideEvidenceTitle}`);
+    const section = markdown.split(`## ${m.outsideEvidenceTitle}`)[1] ?? '';
+    expect(section).toContain(`**${m.verdictLabel}:** ${m.verdicts.compliant}`);
+    expect(section).toContain(`**${m.outsideEvidenceLabel}:** Lokaasstations op de locatie bekijken.`);
+    // Невідповідність уже несе цей рядок вище — у розділі вона не дублюється.
+    expect(section).not.toContain('Bezoekrapporten');
+    // Compliant без «поза документом» у звіт не потрапляє зовсім.
+    expect(markdown).not.toContain('Niets buiten het document.');
+
+    // JSON — ті самі дані з кодами полів.
+    const json = JSON.parse(readFileSync((await orch.exportRun(runId, 'json')).path, 'utf8')) as {
+      findings: Array<{ outsideEvidence: string | null }>;
+    };
+    expect(json.findings.map((f) => f.outsideEvidence)).toEqual(
+      expect.arrayContaining(['Bezoekrapporten van de bestrijder inzien.', 'Lokaasstations op de locatie bekijken.', null]),
+    );
+  });
+
+  it('без «поза документом» розділу немає', async () => {
+    const { runId } = planRun(fixture.db, runConfig(), {
+      judge: 'claude-opus-5',
+      critic: null,
+      promptVersion: 'judge.v2',
+    });
+    const { path } = await orchestrator({}).exportRun(runId, 'markdown');
+    expect(readFileSync(path, 'utf8')).not.toContain(mainMessages('en').export.outsideEvidenceTitle);
+  });
+
   it('«мовою стандарту» — англійською', async () => {
     const { runId } = planRun(fixture.db, runConfig(), {
       judge: 'claude-opus-5',
@@ -431,5 +515,106 @@ describe('експорт Markdown', () => {
     await expect(orchestrator({}).exportRun(fixture.runId, 'xlsx')).rejects.toThrow(
       'Експорт у XLSX ще не реалізовано',
     );
+  });
+});
+
+// ─── Stage 1: легенда позначок ───────────────────────────────────────────────
+
+describe('extractClauses: легенда позначок', () => {
+  /** Версія стандарту з однією сторінкою вимог і сторінкою вступу перед нею. */
+  function specWithClausePage(): number {
+    const { db } = fixture;
+    const blob = 'd'.repeat(64);
+    db.blobs.insert({ hash: blob, relPath: `dd/dd/${blob}.pdf`, byteSize: 10, mime: 'application/pdf' });
+    const intro = 'How to read this standard. Every clause is graded.';
+    const page = 'AF 1.1.1 Is there a reference system for each field? Major Must';
+    const extraction = db.extractions.insert({
+      blobHash: blob,
+      method: 'pdfjs',
+      toolVersion: 'pdfjs-6.3.289',
+      text: intro + page,
+      pageCount: 2,
+      quality: 0.9,
+      pages: [
+        { pageNo: 1, charStart: 0, charEnd: intro.length },
+        { pageNo: 2, charStart: intro.length, charEnd: intro.length + page.length },
+      ],
+    });
+    return db.specs.addVersion({
+      specificationId: fixture.specificationId,
+      versionLabel: 'IFA 5.2',
+      blobHash: blob,
+      extractionId: extraction.id,
+    }).id;
+  }
+
+  function stage1Provider(legendFails: boolean): FakeProvider {
+    const provider = fakeProvider('openrouter');
+    provider.complete = async <T,>(req: CompleteRequest<T>): Promise<CompleteResult<T>> => {
+      provider.calls += 1;
+      provider.requests.push(req as CompleteRequest<unknown>);
+      if (req.promptVersion === 'marker_legend.v1' && legendFails) {
+        throw new LlmError('transport', '503 Service Unavailable', { providerId: 'openrouter' });
+      }
+      const data =
+        req.promptVersion === 'marker_legend.v1'
+          ? { items: [{ code: 'Major Must', label: 'Major Must', meaning: '100% compliance is required.' }] }
+          : {
+              clauses: [
+                {
+                  clauseNo: 'AF 1.1.1',
+                  sectionNo: 'AF 1',
+                  sectionTitle: 'Site history',
+                  topic: null,
+                  requirementText: 'Is there a reference system for each field?',
+                  markers: ['Major Must'],
+                  obligation: null,
+                  truncated: false,
+                },
+              ],
+            };
+      return {
+        data: data as T,
+        citations: [],
+        usage: { input: 100, cachedInput: 0, cacheWrite: 0, output: 10 },
+        costUsd: 0.001,
+        modelId: req.model ?? 'openrouter-model',
+        providerId: 'openrouter',
+        latencyMs: 1,
+        raw: null,
+        fromCache: false,
+      };
+    };
+    return provider;
+  }
+
+  it('легенда прочитана — зберігається з реєстром, виклик потрапляє в журнал витрат', async () => {
+    const specVersionId = specWithClausePage();
+    const provider = stage1Provider(false);
+    const events = recorder();
+
+    await orchestrator({ openrouter: provider }, events).extractClauses(specVersionId);
+
+    expect(provider.requests.map((r) => r.promptVersion)).toEqual(['clause_extract.v2', 'marker_legend.v1']);
+    expect(fixture.db.specs.getVersion(specVersionId)?.markerLegend).toEqual([
+      { code: 'Major Must', label: 'Major Must', meaning: '100% compliance is required.' },
+    ]);
+    const ledger = fixture.db.spend.recent(10).filter((e) => e.specVersionId === specVersionId);
+    expect(ledger.map((e) => e.promptVersion).sort()).toEqual(['clause_extract.v2', 'marker_legend.v1']);
+    expect(events.toasts).toEqual([]);
+  });
+
+  it('легенда не вдалась — реєстр збережено, тост-попередження мовою інтерфейсу', async () => {
+    fixture.db.settings.set({ uiLanguage: 'uk' });
+    const specVersionId = specWithClausePage();
+    const events = recorder();
+
+    const stored = await orchestrator({ openrouter: stage1Provider(true) }, events).extractClauses(specVersionId);
+
+    expect(stored).toBe(1);
+    expect(fixture.db.clauses.list(specVersionId).map((c) => c.markers)).toEqual([['Major Must']]);
+    expect(fixture.db.specs.getVersion(specVersionId)?.markerLegend).toBeNull();
+    const warning = events.toasts.find((t) => t.level === 'warn');
+    expect(warning?.message).toContain('Реєстр вимог збережено, але розшифровку позначок стандарту');
   });
 });

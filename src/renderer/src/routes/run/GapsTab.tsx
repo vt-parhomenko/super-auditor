@@ -42,7 +42,8 @@ export function GapsTab() {
     {
       key: 'obligation',
       header: t.gaps.colObligation,
-      width: '76px',
+      hint: t.gaps.colObligationHint,
+      width: '88px',
       render: (g) =>
         g.obligation ? (
           <span className="chip" title={labels.obligation[g.obligation]}>
@@ -55,6 +56,7 @@ export function GapsTab() {
     {
       key: 'pages',
       header: t.gaps.colPages,
+      hint: t.findings.colPagesHint,
       width: '92px',
       render: (g) => (
         <ClausePages
@@ -77,7 +79,8 @@ export function GapsTab() {
     {
       key: 'severity',
       header: t.gaps.colSeverity,
-      width: '116px',
+      hint: t.gaps.colSeverityHint,
+      width: '150px',
       render: (g) => <SeverityBadge severity={g.severityIfMissing} short />,
     },
     {
@@ -102,16 +105,18 @@ export function GapsTab() {
       >
         {(list) => (
           <>
-            <p className="muted small">
+            <p className="muted small" style={{ margin: 0 }}>
               {t.gaps.summaryLead}
               <strong className="tabnum">{list.length}</strong>
               {t.gaps.summaryTail}
             </p>
+            {/* Без цього 100+ прогалин у прогоні з одним документом читаються як провал аудиту. */}
+            <div className="read-hint">{t.gaps.summaryNote}</div>
             <DataTable
               columns={columns}
               rows={list}
               rowKey={(g) => g.clauseId}
-              maxHeight="calc(100vh - 300px)"
+              maxHeight="calc(100vh - 340px)"
               ariaLabel={t.gaps.tableLabel}
             />
             <PdfModal target={pdfTarget} onClose={() => setPdfTarget(null)} />

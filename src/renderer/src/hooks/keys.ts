@@ -1,10 +1,13 @@
 import type { DocumentKind, FindingQuery } from '@shared/domain';
+import type { LibraryDeleteKind } from '@shared/ipc';
 
 /** Ключі react-query в одному місці — щоб інвалідація не розповзалась по файлах. */
 export const qk = {
   documents: (query?: { search?: string; kind?: DocumentKind }) => ['documents', query ?? {}] as const,
   document: (id: number) => ['document', id] as const,
   documentRuns: (id: number) => ['documentRuns', id] as const,
+  /** Ціна видалення — завжди свіжа: рахується щоразу при відкритті вікна. */
+  libraryDeleteImpact: (kind: LibraryDeleteKind, id: number) => ['libraryDeleteImpact', kind, id] as const,
 
   specs: () => ['specs'] as const,
   spec: (id: number) => ['spec', id] as const,

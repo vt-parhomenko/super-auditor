@@ -11,27 +11,29 @@ import {
 } from '@main/i18n';
 import {
   buildRequest,
-  criticV1,
-  judgeV1,
+  criticV2,
+  judgeV2,
   isFatalLlmError,
   severityFromTool,
   verifyQuote,
-  type CriticInput,
-  type JudgeInput,
-  type JudgeOutput,
+  type CriticV2Input,
+  type JudgeV2Input,
+  type JudgeV2Output,
   type LlmProvider,
-  type ReportFinding,
+  type ReportFindingV2,
 } from '@main/llm';
-import type {
-  ClauseDto,
-  FindingDto,
-  Language,
-  ResultsLanguage,
-  RunConfig,
-  RunProgress,
-  Severity,
-  UsageTotals,
-  Verdict,
+import {
+  legendEntriesFor,
+  type ClauseDto,
+  type FindingDto,
+  type Language,
+  type MarkerLegendItem,
+  type ResultsLanguage,
+  type RunConfig,
+  type RunProgress,
+  type Severity,
+  type UsageTotals,
+  type Verdict,
 } from '@shared/domain';
 
 /**
@@ -332,6 +334,12 @@ interface RunContext {
   specName: string;
   specVersion: string;
   gradingRules: string | null;
+  /**
+   * Легенда позначок стандарту — його власні пояснення кодів біля вимог.
+   * Читається на старті виконання: прогін, продовжений після правки легенди,
+   * бере нову, і ключ кешу (легенда в ньому) це врахує.
+   */
+  markerLegend: MarkerLegendItem[] | null;
   /** Мова висновків моделі; `''` — мовою стандарту. Цитати — завжди мовою оригіналу. */
   language: ResultsLanguage;
   /** Службові позначки у findings — мовою результатів. */
@@ -353,6 +361,7 @@ function loadRunContext(db: Db, runId: number, specVersionId: number): RunContex
     specName: spec?.name ?? 'Specification',
     specVersion: version?.versionLabel ?? '—',
     gradingRules: db.specs.gradingRules(specVersionId),
+    markerLegend: version?.markerLegend ?? null,
     language,
     results: resultsMessages(language).results,
     uiLanguage,
@@ -456,7 +465,7 @@ async function runJudgeTask(
   const document = version ? db.documents.get(version.documentId) : null;
 
   const first = clauses[0]!;
-  const input: JudgeInput = {
+  const input: JudgeV2Input = {
     spec: { name: context.specName, version: context.specVersion, gradingRules: context.gradingRules },
     doc: {
       title: document?.title ?? 'Document',
@@ -465,16 +474,20 @@ async function runJudgeTask(
     },
     section: { sectionNo: payload.sectionNo, sectionTitle: first.sectionTitle },
     ...(context.language ? { language: context.language } : {}),
+    // Позначки й легенда — щоб процедура не отримувала `partial` лише за те, що
+    // вона не запис і не огляд майданчика (див. judge.v2).
+    markerLegend: context.markerLegend,
     clauses: clauses.map((c) => ({
       clauseNo: c.clauseNo,
       topic: c.topic,
       obligation: c.obligation,
       requirementText: c.requirementText,
+      markers: c.markers,
     })),
   };
 
-  const request = buildRequest(judgeV1, input, { model: deps.judge.models[0] });
-  const result = await deps.judge.complete<JudgeOutput>(request, signal);
+  const request = buildRequest(judgeV2, input, { model: deps.judge.models[0] });
+  const result = await deps.judge.complete<JudgeV2Output>(request, signal);
 
   accrueUsage(db, runId, result, report);
 
@@ -552,7 +565,7 @@ function toFindingInput(
   runId: number,
   clauseId: number,
   documentVersionId: number,
-  finding: ReportFinding,
+  finding: ReportFindingV2,
   doc: DocText,
   report: RunExecutionReport,
   context: Pick<RunContext, 'results'>,
@@ -599,6 +612,8 @@ function toFindingInput(
     rationale,
     gap: finding.gap ?? null,
     recommendation: finding.recommendation ?? null,
+    // Порожній рядок — те саме, що «нічого перевіряти поза документом».
+    outsideEvidence: finding.outside_evidence?.trim() || null,
     evidence,
   };
 }
@@ -649,14 +664,18 @@ async function runCriticTask(
   const clause = db.clauses.get(finding.clauseId);
   if (!clause) return;
 
-  const input: CriticInput = {
+  const input: CriticV2Input = {
     spec: { name: context.specName, version: context.specVersion },
     clause: {
       clauseNo: clause.clauseNo,
       topic: clause.topic,
       obligation: clause.obligation,
       requirementText: clause.requirementText,
+      markers: clause.markers,
     },
+    // Лише пункти легенди для кодів цієї вимоги: критик бачить мінімум контексту.
+    markerLegend: legendEntriesFor(clause.markers, context.markerLegend),
+    claimedOutsideEvidence: finding.outsideEvidence,
     evidence: finding.evidence.map((e) => ({
       quote: e.quote,
       page: e.pageNo,
@@ -666,7 +685,7 @@ async function runCriticTask(
     ...(context.language ? { language: context.language } : {}),
   };
 
-  const request = buildRequest(criticV1, input, { model: critic.models[0] });
+  const request = buildRequest(criticV2, input, { model: critic.models[0] });
   const result = await critic.complete(request, signal);
 
   accrueUsage(db, runId, result, report);
@@ -686,6 +705,8 @@ async function runCriticTask(
     rationale: `${context.results.criticDisagreed} ${verdict.reason ?? ''}\n\n${finding.rationale}`.trim(),
     gap: finding.gap,
     recommendation: finding.recommendation,
+    // Що перевірити на аудиті, не залежить від того, чи погодився критик.
+    outsideEvidence: finding.outsideEvidence,
     evidence: finding.evidence.map((e) => ({
       documentVersionId: e.documentVersionId,
       quote: e.quote,

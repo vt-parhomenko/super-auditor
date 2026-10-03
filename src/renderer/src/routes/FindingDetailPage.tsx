@@ -1,9 +1,16 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import type { FindingDto, Severity, Verdict } from '@shared/domain';
+import type { FindingDto, MarkerLegendItem, Severity, Verdict } from '@shared/domain';
 import { SEVERITIES, VERDICTS } from '@shared/domain';
-import { SeverityBadge, VerdictBadge, VerifiedBadge } from '@renderer/components/Badges';
+import {
+  EvidenceSourceTag,
+  MarkerBadges,
+  SeverityBadge,
+  VerdictBadge,
+  VerifiedBadge,
+} from '@renderer/components/Badges';
+import { InfoTip, Labeled } from '@renderer/components/InfoTip';
 import { ClausePages, PdfModal, type PdfTarget } from '@renderer/components/ClausePages';
 import { EvidenceViewer } from '@renderer/components/EvidenceViewer';
 import { KeyboardHint } from '@renderer/components/KeyboardHint';
@@ -12,10 +19,11 @@ import { useClause } from '@renderer/hooks/useClauses';
 import { useClearReview, useFinding, useFindings, useReviewFinding } from '@renderer/hooks/useFindings';
 import { useHotkeys } from '@renderer/hooks/useHotkeys';
 import { useRunCoverage } from '@renderer/hooks/useRuns';
-import { useRunSpecBlobHash } from '@renderer/hooks/useSpecs';
+import { useRunSpecVersion } from '@renderer/hooks/useSpecs';
 import { getMessages, useT } from '@renderer/i18n';
 import { formatConfidence, formatDateTime } from '@renderer/lib/format';
-import { useLabels } from '@renderer/lib/labels';
+import { VERDICT_GLYPH, isPotentialSeverity, useLabels } from '@renderer/lib/labels';
+import { markerHints } from '@renderer/lib/markers';
 import { usePageContext } from '@renderer/store/topbar';
 import { toast } from '@renderer/store/ui';
 
@@ -38,7 +46,8 @@ export function FindingDetailPage() {
 
   const [activeEvidenceId, setActiveEvidenceId] = useState<number | null>(null);
   const [pdfTarget, setPdfTarget] = useState<PdfTarget | null>(null);
-  const specBlobHash = useRunSpecBlobHash(Number.isFinite(runId) ? runId : null);
+  const specVersion = useRunSpecVersion(Number.isFinite(runId) ? runId : null);
+  const specBlobHash = specVersion.data?.blobHash ?? null;
 
   usePageContext([
     { label: t.nav.runs, to: '/runs' },
@@ -86,7 +95,10 @@ export function FindingDetailPage() {
           </span>
           <span className="truncate grow">{data.clause.topic ?? ''}</span>
           <VerdictBadge verdict={data.verdict} />
-          <SeverityBadge severity={data.severity} />
+          {/* Без severity у шапці не лишаємо самотнє «—» поруч із вердиктом — воно читається як ще один статус. */}
+          {data.severity && (
+            <SeverityBadge severity={data.severity} potential={isPotentialSeverity(data.verdict)} />
+          )}
         </div>
 
         <div className="pane-body">
@@ -103,7 +115,14 @@ export function FindingDetailPage() {
               <span>
                 {t.findingDetail.section(data.clause.sectionNo ?? '—', data.clause.sectionTitle ?? '')}
               </span>
-              {data.clause.obligation && <span className="chip">{data.clause.obligation}</span>}
+              {data.clause.obligation && (
+                <span className="chip" title={labels.obligation[data.clause.obligation]}>
+                  {data.clause.obligation}
+                </span>
+              )}
+              {clause.data && clause.data.markers.length > 0 && (
+                <ClauseMarkers markers={clause.data.markers} legend={specVersion.data?.markerLegend ?? null} />
+              )}
               <ClausePages
                 pageFrom={data.clause.pageFrom}
                 pageTo={data.clause.pageTo}
@@ -118,8 +137,16 @@ export function FindingDetailPage() {
                     : undefined
                 }
               />
-              <span>{t.findingDetail.document(docTitle(data.documentVersionId))}</span>
-              <span>{t.findingDetail.confidence(formatConfidence(data.confidence))}</span>
+              <span className="labeled">
+                {t.findingDetail.document(docTitle(data.documentVersionId))}
+                {data.documentVersionId == null && (
+                  <InfoTip about={t.findingDetail.aggregate}>{t.findings.colDocumentHint}</InfoTip>
+                )}
+              </span>
+              <span className="labeled">
+                {t.findingDetail.confidence(formatConfidence(data.confidence))}
+                <InfoTip about={t.findings.colConfidence}>{t.findings.colConfidenceHint}</InfoTip>
+              </span>
             </div>
           </div>
 
@@ -132,6 +159,16 @@ export function FindingDetailPage() {
             <div className="block">
               <div className="block-label">{t.findingDetail.gap}</div>
               <p className="pre-wrap">{data.gap}</p>
+            </div>
+          )}
+
+          {/* Не зауваження до документа, а що аудитор перевіряє записами чи оглядом (judge.v2). */}
+          {data.outsideEvidence && (
+            <div className="block">
+              <div className="block-label">
+                <Labeled label={t.findingDetail.outsideEvidence} hint={t.findingDetail.outsideEvidenceHint} />
+              </div>
+              <p className="pre-wrap outside-evidence">{data.outsideEvidence}</p>
             </div>
           )}
 
@@ -169,7 +206,9 @@ export function FindingDetailPage() {
 
       <div className="pane">
         <div className="pane-head">
-          <span className="section-title grow">{t.findingDetail.evidence}</span>
+          <span className="grow">
+            <Labeled className="section-title" label={t.findingDetail.evidence} hint={t.findingDetail.evidenceHint} />
+          </span>
           <span className="dim xsmall tabnum">
             {t.findingDetail.verifiedCount(
               data.evidence.filter((e) => e.verified).length,
@@ -188,10 +227,11 @@ export function FindingDetailPage() {
             data.evidence.map((e) => (
               <div key={e.id} className={`evidence ${activeEvidence?.id === e.id ? 'is-active' : ''}`}>
                 <div className="evidence-head">
-                  <span className="dim">
+                  <span className="dim nowrap">
                     {t.findingDetail.pageShort} {e.pageNo ?? '—'}
                   </span>
                   <span className="dim truncate grow">{docTitle(e.documentVersionId)}</span>
+                  <EvidenceSourceTag source={e.source} />
                   <VerifiedBadge verified={e.verified} />
                 </div>
                 <button type="button" className="evidence-quote" onClick={() => setActiveEvidenceId(e.id)}>
@@ -220,6 +260,39 @@ export function FindingDetailPage() {
 
       <PdfModal target={pdfTarget} onClose={() => setPdfTarget(null)} />
     </div>
+  );
+}
+
+// ─── Позначки стандарту ─────────────────────────────────────────────────────
+
+/**
+ * Позначки стандарту біля вимоги. Самі значки «P R» без підпису — шифр, тому
+ * поруч підпис, а в «ⓘ» — що кожна означає, словами самого стандарту.
+ * Позначку, якої легенда не пояснює, так і називаємо — значення не вигадуємо.
+ */
+function ClauseMarkers({
+  markers,
+  legend,
+}: {
+  markers: readonly string[];
+  legend: readonly MarkerLegendItem[] | null;
+}) {
+  const t = useT();
+  return (
+    <span className="labeled clause-markers">
+      <span>{t.findingDetail.markers}</span>
+      <MarkerBadges markers={markers} legend={legend} />
+      <InfoTip about={t.findingDetail.markers}>
+        <span className="info-para">{t.findingDetail.markersHint}</span>
+        <span className="info-legend">
+          {markerHints(markers, legend).map((hint) => (
+            <span key={hint.code} className="info-legend-item">
+              {hint.text ?? t.findingDetail.markerUnexplained(hint.code)}
+            </span>
+          ))}
+        </span>
+      </InfoTip>
+    </span>
   );
 }
 
@@ -252,7 +325,26 @@ function ClauseTreePane({
   return (
     <div className="pane">
       <div className="pane-head">
-        <span className="section-title">{t.findingDetail.treeTitle}</span>
+        <Labeled
+          className="section-title"
+          label={t.findingDetail.treeTitle}
+          hint={
+            <>
+              <span className="info-para">{t.findingDetail.treeHintLead}</span>
+              <span className="info-legend">
+                {VERDICTS.map((v) => (
+                  <span key={v} className="info-legend-item">
+                    <span className={`tree-glyph v-${v}`} aria-hidden="true">
+                      {VERDICT_GLYPH[v]}
+                    </span>
+                    <span>{labels.verdict[v]}</span>
+                  </span>
+                ))}
+              </span>
+              <span className="info-para">{t.findingDetail.treeHintReviewed}</span>
+            </>
+          }
+        />
         <span className="spacer" />
         <span className="dim xsmall tabnum">{items.length}</span>
       </div>
@@ -270,13 +362,28 @@ function ClauseTreePane({
                   className={`tree-item ${f.id === activeId ? 'is-active' : ''}`}
                   onClick={() => navigate(`/runs/${runId}/findings/${f.id}`)}
                   title={`${f.clause.clauseNo} — ${labels.verdict[f.verdict]}`}
+                  // Вердикт — лише гліфом і кольором (aria-hidden), тож для скрінрідера — у назві кнопки.
+                  aria-label={`${f.clause.clauseNo} ${f.clause.topic ?? ''} — ${labels.verdict[f.verdict]}${
+                    f.review ? ` · ${t.findingDetail.reviewedDot}` : ''
+                  }`}
                 >
+                  {/* Смужка — лише колір; гліф поруч робить вердикт читабельним і без кольору. */}
                   <span className={`tree-swatch v-${f.verdict}`} aria-hidden="true" />
+                  <span className={`tree-glyph v-${f.verdict}`} aria-hidden="true">
+                    {VERDICT_GLYPH[f.verdict]}
+                  </span>
                   <span className="mono xsmall" style={{ width: 46 }}>
                     {f.clause.clauseNo}
                   </span>
                   <span className="truncate grow xsmall">{f.clause.topic ?? ''}</span>
-                  {f.review && <span className="rs-dot rs-confirmed" title={t.findingDetail.reviewedDot} />}
+                  {f.review && (
+                    <span
+                      className="rs-dot rs-confirmed"
+                      title={t.findingDetail.reviewedDot}
+                      role="img"
+                      aria-label={t.findingDetail.reviewedDot}
+                    />
+                  )}
                 </button>
               ))}
             </div>

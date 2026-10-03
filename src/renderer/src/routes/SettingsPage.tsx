@@ -4,8 +4,11 @@ import { STAGES, isLanguage, type ResultsLanguage, type SpendByStage, type Stage
 import type { AppSettings, ProviderStatus } from '@shared/ipc';
 import { BalancePanel, ReportedSpend } from '@renderer/components/Balance';
 import { DataTable, type Column } from '@renderer/components/DataTable';
+import { InfoTip, Labeled } from '@renderer/components/InfoTip';
 import { ModelHint, ModelPicker } from '@renderer/components/ModelPicker';
+import { effectiveRouting } from '@renderer/lib/models';
 import { EmptyState, QueryState } from '@renderer/components/States';
+import { TourSettingsCard } from '@renderer/components/tour/TourRoot';
 import {
   useClearApiKey,
   useProviders,
@@ -88,7 +91,7 @@ export function SettingsPage() {
           <span className="field-hint">{t.settings.themeHint}</span>
         </section>
 
-        <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }}>
+        <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }} data-tour="settings-language">
           <div className="row-between">
             <h3>{t.settings.languageTitle}</h3>
           </div>
@@ -109,6 +112,8 @@ export function SettingsPage() {
           <span className="field-hint">{t.settings.languageHint}</span>
         </section>
 
+        <TourSettingsCard />
+
         <QueryState
           isPending={settings.isPending}
           error={settings.error}
@@ -117,7 +122,7 @@ export function SettingsPage() {
         >
           {(current) => (
             <>
-              <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }}>
+              <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }} data-tour="settings-routing">
                 <div className="row-between">
                   <h3>{t.settings.routingTitle}</h3>
                   <button
@@ -131,11 +136,16 @@ export function SettingsPage() {
                   </button>
                 </div>
                 <p className="small muted">{t.settings.routingHint}</p>
-                <div className="routing-row routing-head" aria-hidden="true">
-                  <span>{t.settings.colStage}</span>
-                  <span>{t.settings.colProvider}</span>
-                  <span>{t.settings.colModel}</span>
-                  <span>{t.settings.colEffort}</span>
+                {/* Підписи приховані від скрінрідера (кожен select має власний aria-label),
+                    а «ⓘ» біля «Глибини» — ні: це єдине пояснення, що таке effort. */}
+                <div className="routing-row routing-head">
+                  <span aria-hidden="true">{t.settings.colStage}</span>
+                  <span aria-hidden="true">{t.settings.colProvider}</span>
+                  <span aria-hidden="true">{t.settings.colModel}</span>
+                  <span className="labeled">
+                    <span aria-hidden="true">{t.settings.colEffort}</span>
+                    <InfoTip about={t.settings.colEffort}>{t.settings.colEffortHint}</InfoTip>
+                  </span>
                 </div>
                 {STAGES.map((stage) => (
                   <RoutingRow
@@ -205,7 +215,7 @@ export function SettingsPage() {
           )}
         </QueryState>
 
-        <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }}>
+        <section className="card card-pad col" style={{ gap: 'var(--sp-3)' }} data-tour="settings-providers">
           <h3>{t.settings.providersTitle}</h3>
           <QueryState
             isPending={providers.isPending}
@@ -263,35 +273,40 @@ function SpendSection() {
     {
       key: 'calls',
       header: t.settings.spendColCalls,
-      width: '92px',
+      hint: t.settings.spendColCallsHint,
+      width: '104px',
       align: 'right',
       render: (row) => <span className="tabnum">{formatNumber(row.calls)}</span>,
     },
     {
       key: 'input',
       header: t.settings.spendColInput,
-      width: '88px',
+      hint: t.settings.spendColInputHint,
+      width: '96px',
       align: 'right',
       render: (row) => <span className="tabnum">{formatTokens(row.inputTokens)}</span>,
     },
     {
       key: 'cached',
       header: t.settings.spendColCached,
-      width: '88px',
+      hint: t.settings.spendColCachedHint,
+      width: '96px',
       align: 'right',
       render: (row) => <span className="tabnum">{formatTokens(row.cachedTokens)}</span>,
     },
     {
       key: 'output',
       header: t.settings.spendColOutput,
-      width: '88px',
+      hint: t.settings.spendColOutputHint,
+      width: '96px',
       align: 'right',
       render: (row) => <span className="tabnum">{formatTokens(row.outputTokens)}</span>,
     },
     {
       key: 'cost',
       header: t.settings.spendColCost,
-      width: '92px',
+      hint: t.settings.spendColCostHint,
+      width: '104px',
       align: 'right',
       render: (row) => <span className="tabnum mono">{formatCost(row.costUsd)}</span>,
     },
@@ -381,17 +396,21 @@ function RoutingRow({
 
   return (
     <div className="routing-row">
-      <span className="routing-stage" title={labels.stageHint[stage]}>
-        {labels.stage[stage]}
+      {/* Що робить етап — у «ⓘ», а не лише в title: інакше «Конспект специфікації» чи «Критик» — загадка. */}
+      <span className="routing-stage">
+        <Labeled label={labels.stage[stage]} hint={labels.stageHint[stage]} />
       </span>
+      {/* Показуємо модель, якою етап РЕАЛЬНО працюватиме, а не «за замовчуванням»:
+          так видно і типовий OpenRouter + Opus 5.5, і що саме зміниться після правки. */}
       <ModelPicker
-        value={entry}
+        value={effectiveRouting(stage, entry)}
         providers={providers}
         label={labels.stage[stage]}
+        allowDefault={false}
         onChange={(next) => onChange({ ...settings.routing, [stage]: next })}
       />
       <div className="routing-hint">
-        <ModelHint value={entry} providers={providers} />
+        <ModelHint value={effectiveRouting(stage, entry)} providers={providers} isDefault={entry === null} />
       </div>
     </div>
   );

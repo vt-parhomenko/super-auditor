@@ -47,6 +47,8 @@ export const nl: MainMessages = {
     verdictLabel: 'Oordeel',
     gapLabel: 'Wat ontbreekt',
     recommendationLabel: 'Aanbeveling',
+    outsideEvidenceLabel: 'Buiten het document te controleren',
+    outsideEvidenceTitle: 'Te controleren tijdens de audit — buiten de documenten',
     page: (page) => `blz. ${page}`,
     gapsTitle: 'Hiaten — eisen zonder enig bewijs',
     colClause: 'Eis',
@@ -100,6 +102,9 @@ export const nl: MainMessages = {
     reviewedKept: (failed) =>
       `${failed} ${n(failed, 'pagina kon', 'pagina’s konden')} niet worden verwerkt. Het gecontroleerde eisenregister is ongewijzigd gebleven — ` +
       'los de oorzaak op en start de extractie opnieuw.',
+    markerLegendFailed: (detail) =>
+      'Het eisenregister is opgeslagen, maar de uitleg van de markeringen bij de eisen kon deze keer niet uit de norm worden gelezen. ' +
+      `Start de extractie opnieuw om het nog eens te proberen. (${detail})`,
   },
 
   llm: {
@@ -158,9 +163,9 @@ export const nl: MainMessages = {
       'De orchestrator voor auditruns is niet aangesloten — auditruns zijn in deze build niet beschikbaar',
   },
 
-  documents: {
-    usedInRuns: (count) =>
-      `Het document wordt gebruikt in ${count} ${n(count, 'auditrun', 'auditruns')} — verwijder die eerst`,
+  library: {
+    invalidTarget: (value) =>
+      `Niets te verwijderen: verwacht werd een norm, een normversie, een document of een documentversie, ontvangen: ${value}`,
   },
 
   clauseEditing: {
@@ -171,6 +176,8 @@ export const nl: MainMessages = {
     registryEmpty: 'Het eisenregister is leeg — er is niets om als gecontroleerd te markeren',
     registryNotReviewed: (unconfirmed, flagged) =>
       `Het eisenregister is niet volledig gecontroleerd: ${unconfirmed} niet bevestigd, ${flagged} gemarkeerd`,
+    markersInvalid: (maxCount, maxLength) =>
+      `Markeringen van de norm moeten een lijst zijn van hoogstens ${maxCount} korte codes, elk niet leeg en hoogstens ${maxLength} tekens lang`,
   },
 
   docProfiles: {

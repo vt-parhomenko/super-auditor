@@ -6,7 +6,16 @@
  * класів моделей) підставляє компонент.
  */
 
-import { EFFORTS, isEffort, type Effort, type ModelInfo, type ModelRef } from '@shared/domain';
+import {
+  DEFAULT_ROUTING,
+  EFFORTS,
+  isEffort,
+  stageDefaultModel,
+  type Effort,
+  type ModelInfo,
+  type ModelRef,
+  type Stage,
+} from '@shared/domain';
 import type { ProviderStatus } from '@shared/ipc';
 
 /**
@@ -108,11 +117,21 @@ export function normalizeProviderStatus(raw: ProviderStatus): ProviderStatus {
 }
 
 /**
- * Провайдер вбудованої маршрутизації (`DEFAULT_ROUTING` у main — усі етапи на
- * Anthropic). Порожня модель означає різне: для цього провайдера — типову модель
- * ЕТАПУ, для будь-якого іншого — типову модель самого провайдера.
+ * Модель, якою етап ФАКТИЧНО працюватиме — так само, як її обере main
+ * (`resolveRouting`): збережений вибір, а без нього — `DEFAULT_ROUTING`;
+ * порожня модель — типова модель етапу в обраного провайдера. Інтерфейс
+ * показує саме її, а не абстрактне «за замовчуванням».
  */
-export const STAGE_DEFAULT_PROVIDER = 'anthropic';
+export function effectiveRouting(stage: Stage, entry: ModelChoice | null | undefined): ModelChoice {
+  const fallback = DEFAULT_ROUTING[stage];
+  if (!entry || (!entry.provider && !entry.model)) return { ...fallback };
+  const provider = entry.provider || fallback.provider;
+  const model =
+    entry.model || stageDefaultModel(provider, stage) || (provider === fallback.provider ? fallback.model : '');
+  // Як у main: effort не задано — діє effort етапу за замовчуванням.
+  const effort = entry.effort === undefined ? fallback.effort : entry.effort;
+  return isEffort(effort) ? { provider, model, effort } : { provider, model };
+}
 
 export function findModel(
   provider: ProviderStatus | undefined,

@@ -2,15 +2,27 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import {
-  MODULES,
+  CLAUSE_REVIEW_STATUSES,
   OBLIGATIONS,
   type ClauseDto,
   type ClausePatch,
-  type Module,
+  type MarkerLegendItem,
   type Obligation,
 } from '@shared/domain';
-import { ModuleBadges, ReviewStatusDot } from '@renderer/components/Badges';
+import { MarkerBadges, ReviewStatusDot } from '@renderer/components/Badges';
+import {
+  formatMarkerInput,
+  legendItemText,
+  markerEditorMode,
+  markerTitle,
+  parseMarkerInput,
+  registryMarkerView,
+  sameMarkers,
+  toggleMarker,
+  type RegistryMarkerView,
+} from '@renderer/lib/markers';
 import { ClausePages, PdfModal, type PdfTarget } from '@renderer/components/ClausePages';
+import { InfoTip, Labeled } from '@renderer/components/InfoTip';
 import { KeyboardHint } from '@renderer/components/KeyboardHint';
 import { ProgressBar } from '@renderer/components/Meters';
 import { Modal } from '@renderer/components/Modal';
@@ -78,10 +90,21 @@ export function ClauseRegistryPage() {
       done: payload.done,
       ...(payload.error ? { error: payload.error } : {}),
     });
-    if (payload.done) void clauses.refetch();
+    if (payload.done) {
+      void clauses.refetch();
+      // Легенда позначок зберігається разом із реєстром — вона теж могла змінитись.
+      void version.refetch();
+    }
   });
 
   const all = clauses.data ?? [];
+  const legend = version.data?.markerLegend ?? null;
+  const markerView = useMemo(() => registryMarkerView(legend, all), [legend, all]);
+  // 'AF 1.2.3' не влазить у колонку, розраховану на '10.3' (≈7.5px на знак моноширинного шрифту).
+  const clauseNoWidth = useMemo(
+    () => Math.max(58, Math.ceil(Math.max(0, ...all.map((c) => c.clauseNo.length)) * 7.5) + 6),
+    [all],
+  );
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -152,9 +175,13 @@ export function ClauseRegistryPage() {
 
   return (
     <div className="page" style={{ overflow: 'hidden' }}>
-      <div className="review-bar">
+      <div className="review-bar" data-tour="registry-review">
         <div className="col" style={{ gap: 2, minWidth: 200 }}>
-          <span className="section-title">{t.clauseRegistry.reviewTitle}</span>
+          <Labeled
+            className="section-title"
+            label={t.clauseRegistry.reviewTitle}
+            hint={t.clauseRegistry.reviewHint}
+          />
           <span className="small">
             {version.data ? labels.clausesStatus[version.data.clausesStatus] : t.common.loading}
           </span>
@@ -172,12 +199,19 @@ export function ClauseRegistryPage() {
 
         <span className="spacer" />
 
-        <button type="button" className="btn" onClick={() => setShowSummary(true)}>
+        <button
+          type="button"
+          className="btn"
+          title={t.clauseRegistry.summaryBtnTitle}
+          onClick={() => setShowSummary(true)}
+        >
           {t.clauseRegistry.summaryBtn}
         </button>
         <button
           type="button"
           className="btn"
+          data-tour="registry-extract"
+          title={t.clauseRegistry.extractTitle}
           disabled={extract.isPending}
           onClick={() =>
             extract.mutate(specVersionId, {
@@ -236,19 +270,32 @@ export function ClauseRegistryPage() {
             <div className="row" style={{ gap: 'var(--sp-1)' }}>
               {(
                 [
-                  ['all', t.clauseRegistry.filterAll(all.length)],
-                  ['pending', t.clauseRegistry.filterPending(pending)],
-                  ['flagged', t.clauseRegistry.filterFlagged(flagged)],
-                ] as Array<[ReviewFilter, string]>
-              ).map(([value, label]) => (
+                  ['all', t.clauseRegistry.filterAll(all.length), undefined],
+                  ['pending', t.clauseRegistry.filterPending(pending), t.clauseRegistry.filterPendingHint],
+                  ['flagged', t.clauseRegistry.filterFlagged(flagged), t.clauseRegistry.filterFlaggedHint],
+                ] as Array<[ReviewFilter, string, string | undefined]>
+              ).map(([value, label, hint]) => (
                 <button
                   key={value}
                   type="button"
                   className={`filter-chip ${filter === value ? 'on' : ''}`}
+                  title={hint}
+                  aria-pressed={filter === value}
                   onClick={() => setFilter(value)}
                 >
                   {label}
                 </button>
+              ))}
+            </div>
+            {/* Праворуч у кожному рядку — позначки стандарту і кольорова крапка: без легенди це шифр. */}
+            <div className="registry-legend">
+              <MarkerLegendLine view={markerView} legend={legend} />
+              <span className="registry-legend-item">{t.clauseRegistry.legendStatus}</span>
+              {CLAUSE_REVIEW_STATUSES.map((status) => (
+                <span key={status} className="registry-legend-item">
+                  <ReviewStatusDot status={status} />
+                  {labels.clauseReview[status]}
+                </span>
               ))}
             </div>
           </div>
@@ -266,7 +313,13 @@ export function ClauseRegistryPage() {
               }
             />
           ) : (
-            <div className="clause-items" ref={listRef} role="listbox" aria-label={t.clauseRegistry.listLabel}>
+            <div
+              className="clause-items"
+              ref={listRef}
+              role="listbox"
+              aria-label={t.clauseRegistry.listLabel}
+              style={{ ['--clause-no-width' as string]: `${clauseNoWidth}px` }}
+            >
               {visible.map((clause) => (
                 <div
                   key={clause.id}
@@ -288,7 +341,7 @@ export function ClauseRegistryPage() {
                     </span>
                   </span>
                   <span className="clause-flags">
-                    <ModuleBadges modules={clause.modules} />
+                    <MarkerBadges markers={clause.markers} legend={legend} />
                     <ReviewStatusDot status={clause.reviewStatus} />
                   </span>
                 </div>
@@ -312,6 +365,8 @@ export function ClauseRegistryPage() {
             <ClauseEditor
               key={active.id}
               clause={active}
+              legend={legend}
+              versionClauses={all}
               busy={patch.isPending}
               onOpenPdf={
                 version.data?.blobHash
@@ -340,6 +395,66 @@ export function ClauseRegistryPage() {
       {showSummary && <SpecSummaryModal specVersionId={specVersionId} onClose={() => setShowSummary(false)} />}
       <PdfModal target={pdfTarget} onClose={() => setPdfTarget(null)} />
     </div>
+  );
+}
+
+/**
+ * Рядок легенди позначок над списком. Є лише тоді, коли стандарт позначки має:
+ * з легендою — його ж назви, а пояснення в підказках; без легенди — самі коди
+ * з чесною приміткою, що розшифровки в тексті стандарту не знайдено.
+ */
+function MarkerLegendLine({
+  view,
+  legend,
+}: {
+  view: RegistryMarkerView;
+  legend: readonly MarkerLegendItem[] | null;
+}) {
+  const t = useT();
+  if (view.kind === 'none') return null;
+  const unexplained = view.kind === 'legend' ? view.unexplained : view.codes;
+
+  return (
+    <span className="registry-legend-line">
+      <span>{t.clauseRegistry.legendMarkers}</span>
+      {view.kind === 'legend' && (
+        <>
+          {view.items.map((item, i) => (
+            <span key={item.code} className="registry-legend-item">
+              {i > 0 && (
+                <span className="marker-legend-sep" aria-hidden="true">
+                  ·
+                </span>
+              )}
+              <span className="marker-legend-item" title={item.meaning ?? undefined}>
+                {legendItemText(item)}
+              </span>
+            </span>
+          ))}
+          {/* `title` не видно з клавіатури — повні пояснення ще й у підказці «ⓘ». */}
+          <InfoTip about={t.clauseRegistry.fieldMarkers}>
+            <span className="info-para">{t.clauseRegistry.legendMarkersHint}</span>
+            <span className="info-legend">
+              {view.items.map((item) => (
+                <span key={item.code} className="info-legend-item">
+                  {markerTitle(item.code, legend)}
+                </span>
+              ))}
+            </span>
+          </InfoTip>
+        </>
+      )}
+      {unexplained.length > 0 && (
+        <>
+          {unexplained.map((code) => (
+            <span key={code} className="badge badge-marker" title={code}>
+              {code}
+            </span>
+          ))}
+          <span className="marker-legend-note">({t.clauseRegistry.markersUnexplained})</span>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -395,12 +510,17 @@ function SpecSummaryModal({ specVersionId, onClose }: { specVersionId: number; o
 
 function ClauseEditor({
   clause,
+  legend,
+  versionClauses,
   busy,
   onPatch,
   onNext,
   onOpenPdf,
 }: {
   clause: ClauseDto;
+  legend: readonly MarkerLegendItem[] | null;
+  /** Усі вимоги версії: поле позначок без легенди має сенс, лише якщо стандарт їх узагалі має. */
+  versionClauses: readonly ClauseDto[];
   busy: boolean;
   onPatch: (patch: ClausePatch) => void;
   onNext: () => void;
@@ -414,9 +534,17 @@ function ClauseEditor({
     sectionTitle: clause.sectionTitle,
     topic: clause.topic,
     requirementText: clause.requirementText,
-    modules: clause.modules,
+    markers: clause.markers,
     obligation: clause.obligation,
   });
+  // Поле вводу без легенди тримає сирий текст: розбір на кожне натискання
+  // з'їдав би кому чи пробіл, які людина щойно набрала.
+  const [markerText, setMarkerText] = useState(() => formatMarkerInput(clause.markers));
+  const markerMode = useMemo(
+    () => markerEditorMode(legend, versionClauses, clause.markers),
+    [legend, versionClauses, clause.markers],
+  );
+  const draftMarkers = draft.markers ?? [];
 
   const dirty =
     draft.clauseNo !== clause.clauseNo ||
@@ -425,13 +553,7 @@ function ClauseEditor({
     (draft.topic ?? null) !== clause.topic ||
     draft.requirementText !== clause.requirementText ||
     (draft.obligation ?? null) !== clause.obligation ||
-    (draft.modules ?? []).join('') !== clause.modules.join('');
-
-  const toggleModule = (m: Module) => {
-    const current = draft.modules ?? [];
-    const next = current.includes(m) ? current.filter((x) => x !== m) : [...current, m];
-    setDraft({ ...draft, modules: MODULES.filter((x) => next.includes(x)) });
-  };
+    !sameMarkers(draftMarkers, clause.markers);
 
   return (
     <div className="col" style={{ minHeight: 0 }}>
@@ -478,21 +600,50 @@ function ClauseEditor({
             />
           </label>
 
-          <div className="field">
-            <span className="label">{t.clauseRegistry.fieldModules}</span>
-            <div className="module-toggle">
-              {MODULES.map((m) => {
-                const on = (draft.modules ?? []).includes(m);
-                return (
-                  <label key={m} className={on ? 'on' : ''}>
-                    <input type="checkbox" checked={on} onChange={() => toggleModule(m)} />
-                    <span className="mono">{m}</span>
-                  </label>
-                );
-              })}
+          {markerMode.kind === 'checkboxes' && (
+            <div className="field">
+              <span className="label">{t.clauseRegistry.fieldMarkers}</span>
+              <div className="module-toggle">
+                {markerMode.options.map((option) => {
+                  const on = draftMarkers.includes(option.code);
+                  return (
+                    // Сама літера нічого не каже — поруч назва зі стандарту, у підказці його пояснення.
+                    <label key={option.code} className={on ? 'on' : ''} title={markerTitle(option.code, legend)}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() =>
+                          setDraft({
+                            ...draft,
+                            markers: toggleMarker(draftMarkers, option.code, markerMode.options),
+                          })
+                        }
+                      />
+                      <span>
+                        <span className="mono">{option.code}</span>
+                        {option.label !== option.code && ` ${option.label}`}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <span className="field-hint">{t.clauseRegistry.markersCheckboxHint}</span>
             </div>
-            <span className="field-hint">{t.clauseRegistry.modulesHint}</span>
-          </div>
+          )}
+          {markerMode.kind === 'text' && (
+            <label className="field">
+              <span className="label">{t.clauseRegistry.fieldMarkers}</span>
+              <input
+                className="input mono"
+                value={markerText}
+                onChange={(e) => {
+                  setMarkerText(e.target.value);
+                  setDraft({ ...draft, markers: parseMarkerInput(e.target.value) });
+                }}
+              />
+              <span className="field-hint">{t.clauseRegistry.markersInputHint}</span>
+            </label>
+          )}
 
           <label className="field">
             <span className="label">{t.clauseRegistry.fieldObligation}</span>
@@ -529,9 +680,16 @@ function ClauseEditor({
           <dd>
             <ClausePages pageFrom={clause.pageFrom} pageTo={clause.pageTo} onOpen={onOpenPdf} />
           </dd>
-          <dt>sortKey</dt>
+          {/* Службові поля — людською назвою й поясненням, а не сирим ім'ям колонки БД. */}
+          <dt className="labeled">
+            {t.clauseRegistry.sortKey}
+            <InfoTip about={t.clauseRegistry.sortKey}>{t.clauseRegistry.sortKeyHint}</InfoTip>
+          </dt>
           <dd className="mono xsmall">{clause.sortKey}</dd>
-          <dt>textHash</dt>
+          <dt className="labeled">
+            {t.clauseRegistry.textHash}
+            <InfoTip about={t.clauseRegistry.textHash}>{t.clauseRegistry.textHashHint}</InfoTip>
+          </dt>
           <dd className="mono xsmall truncate">{clause.textHash}</dd>
         </dl>
       </div>
@@ -540,6 +698,7 @@ function ClauseEditor({
         <button
           type="button"
           className="btn btn-primary"
+          title={t.clauseRegistry.confirmTitle}
           disabled={busy}
           onClick={() => {
             onPatch({ reviewStatus: 'confirmed' });
@@ -560,6 +719,7 @@ function ClauseEditor({
         <button
           type="button"
           className="btn btn-danger"
+          title={t.clauseRegistry.flagTitle}
           disabled={busy}
           onClick={() => onPatch({ reviewStatus: 'flagged' })}
         >

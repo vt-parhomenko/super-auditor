@@ -23,6 +23,7 @@ import {
   type ExtractionDto,
   type FindingDto,
   type GapItem,
+  type MarkerLegendItem,
   type ModelInfo,
   type Module,
   type Obligation,
@@ -95,7 +96,27 @@ const SECTIONS: SectionSeed[] = [
 ];
 
 const OBLIGATIONS_POOL: Obligation[] = ['must', 'must', 'must', 'should', 'should', 'may'];
+/** Прапорці P / R / O біля вимог Tesco: і позначки стандарту, і (застаріле) `modules`. */
 const MODULE_POOL: Module[][] = [['P'], ['O'], ['R'], ['P', 'O'], ['P', 'R', 'O'], ['R', 'O'], ['P', 'R']];
+
+/** Легенда позначок Tesco — слова стандарту зі стор. 10 («Clause Layout»). */
+export const TESCO_MARKER_LEGEND: MarkerLegendItem[] = [
+  {
+    code: 'P',
+    label: 'Policy / procedure',
+    meaning: 'The site must have a documented policy/procedure that has been fully implemented',
+  },
+  {
+    code: 'R',
+    label: 'Records',
+    meaning: 'The site must have comprehensive accurately completed records to demonstrate compliance',
+  },
+  {
+    code: 'O',
+    label: 'Observation',
+    meaning: 'Compliance to the clause will be verified through observation of the site',
+  },
+];
 
 const REQ_TEMPLATES = [
   (t: string) =>
@@ -144,6 +165,8 @@ export const CLAUSES: ClauseDto[] = (() => {
       const r = rnd();
       // Частина вимог перетікає на наступну сторінку — щоб UI показував і діапазон.
       const pages = clausePages(section.no, i, section.count, rnd() < 0.15);
+      // Порядок викликів rnd() той самий, що й до появи позначок: дані між версіями мока не зсуваються.
+      const flags = pick(MODULE_POOL, rnd());
       out.push({
         id: (id += 1),
         specVersionId: 1,
@@ -153,7 +176,8 @@ export const CLAUSES: ClauseDto[] = (() => {
         sectionTitle: section.title,
         topic,
         requirementText: template(topic),
-        modules: pick(MODULE_POOL, rnd()),
+        modules: flags,
+        markers: [...flags],
         obligation: pick(OBLIGATIONS_POOL, rnd()),
         pageFrom: pages.pageFrom,
         pageTo: pages.pageTo,
@@ -168,6 +192,40 @@ export const CLAUSES: ClauseDto[] = (() => {
 export const REVIEWED_CLAUSE_COUNT = CLAUSES.filter(
   (c) => c.reviewStatus === 'confirmed' || c.reviewStatus === 'edited',
 ).length;
+
+/**
+ * Демо-стандарт без позначок: вимоги нумерованою прозою, як у ISO чи нормах
+ * пожежної безпеки. Реєстр такого стандарту не показує жодних значків і
+ * легенди — на ньому це й видно. Тексти вигадані.
+ */
+export const PROSE_SPEC_VERSION_ID = 4;
+
+export const PROSE_CLAUSES: ClauseDto[] = (
+  [
+    ['4.1', '4', 'Organisation', 'Responsibilities', 'The site shall appoint a person responsible for fire safety and a deputy.'],
+    ['4.2', '4', 'Organisation', 'Risk assessment', 'A fire risk assessment shall be documented and reviewed at least annually.'],
+    ['4.2.1', '4', 'Organisation', null, 'The risk assessment shall cover storage of flammable packaging materials.'],
+    ['5.1', '5', 'Escape routes', 'Marking', 'Escape routes shall be marked and kept free of obstructions at all times.'],
+    ['5.2', '5', 'Escape routes', 'Emergency lighting', 'Emergency lighting should be tested monthly and the result recorded.'],
+    ['6.1', '6', 'Equipment', 'Extinguishers', 'Fire extinguishers shall be inspected by a competent person every year.'],
+  ] as const
+).map(([clauseNo, sectionNo, sectionTitle, topic, requirementText], i): ClauseDto => ({
+  id: 5001 + i,
+  specVersionId: PROSE_SPEC_VERSION_ID,
+  clauseNo,
+  sortKey: clauseSortKey(clauseNo),
+  sectionNo,
+  sectionTitle,
+  topic,
+  requirementText,
+  modules: [],
+  markers: [],
+  obligation: /\bshould\b/.test(requirementText) ? 'should' : 'must',
+  pageFrom: 3 + i,
+  pageTo: 3 + i,
+  textHash: `sha256:${(5001 + i).toString(16).padStart(12, '0')}`,
+  reviewStatus: i < 2 ? 'confirmed' : 'auto',
+}));
 
 // ─── Специфікації ────────────────────────────────────────────────────────────
 
@@ -189,6 +247,7 @@ export const SPECIFICATIONS: SpecificationDto[] = [
         clausesStatus: 'extracted',
         clauseCount: CLAUSES.length,
         reviewedClauseCount: REVIEWED_CLAUSE_COUNT,
+        markerLegend: TESCO_MARKER_LEGEND,
       },
       {
         id: 2,
@@ -200,6 +259,7 @@ export const SPECIFICATIONS: SpecificationDto[] = [
         clausesStatus: 'reviewed',
         clauseCount: 176,
         reviewedClauseCount: 176,
+        markerLegend: TESCO_MARKER_LEGEND,
       },
     ],
   },
@@ -220,6 +280,29 @@ export const SPECIFICATIONS: SpecificationDto[] = [
         clausesStatus: 'pending',
         clauseCount: 0,
         reviewedClauseCount: 0,
+        markerLegend: null,
+      },
+    ],
+  },
+  {
+    id: 3,
+    name: 'Fire Safety Code (demo)',
+    issuer: 'Demo',
+    code: 'FSC',
+    cloudAllowed: true,
+    versions: [
+      {
+        id: PROSE_SPEC_VERSION_ID,
+        specificationId: 3,
+        versionLabel: '2024',
+        blobHash: 'dd4410ee5a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7',
+        extractionId: 4,
+        effectiveFrom: '2024-01-01T00:00:00.000Z',
+        clausesStatus: 'extracted',
+        clauseCount: PROSE_CLAUSES.length,
+        reviewedClauseCount: 2,
+        // Стандарт позначок не має — і легенди теж.
+        markerLegend: null,
       },
     ],
   },
@@ -228,7 +311,7 @@ export const SPECIFICATIONS: SpecificationDto[] = [
 export const SPEC_SUMMARY: SpecSummaryDto = {
   specVersionId: 1,
   summary:
-    'Стандарт охоплює вирощування, пакування й постачання декоративних рослин і цибулин для Tesco. 24 секції, три модулі застосовності: Product (P), Responsible sourcing (R), Operational (O).',
+    'Стандарт охоплює вирощування, пакування й постачання декоративних рослин і цибулин для Tesco. 24 секції; позначки біля вимог показують, чим доводиться відповідність: P — політика/процедура, R — записи, O — огляд майданчика.',
   scope:
     'Усі майданчики, що постачають Tesco декоративні рослини, зрізані квіти та цибулини, включно з субпідрядниками пакування.',
   gradingRules:
@@ -407,7 +490,8 @@ export const RUNS: AuditRunDto[] = [
     status: 'done',
     modelJudge: 'claude-opus-5',
     modelCritic: 'claude-sonnet-5',
-    promptVersion: 'judge.v1',
+    // Findings цього прогону мають «перевірити поза документом» — це вже judge.v2.
+    promptVersion: 'judge.v2',
     startedAt: '2026-08-28T12:04:00.000Z',
     finishedAt: '2026-08-28T12:41:37.000Z',
     usage: { inputTokens: 1_842_100, cachedTokens: 1_301_400, outputTokens: 188_640, costUsd: 6.42 },
@@ -416,7 +500,7 @@ export const RUNS: AuditRunDto[] = [
   },
   {
     id: 2,
-    label: 'Пробний прогін — секція 10',
+    label: 'Пробна перевірка — секція 10',
     specVersionId: 1,
     siteProfileId: 1,
     status: 'paused',
@@ -499,6 +583,28 @@ function severityFor(verdict: Verdict, r: number): Severity | null {
   return r < 0.5 ? 'major' : 'minor';
 }
 
+/** Вимога, яку легенда Tesco доводить записами (R) чи оглядом майданчика (O). */
+function provenOutsideDocument(clause: ClauseDto): boolean {
+  return clause.markers.includes('R') || clause.markers.includes('O');
+}
+
+/**
+ * «Перевірити поза документом» — так, як його пише judge.v2: лише для вимог із
+ * позначками R / O і не для «не розглянуто». Без rnd(): решта мока не зсувається.
+ */
+function mockOutsideEvidence(clause: ClauseDto, verdict: Verdict): string | null {
+  if (verdict === 'not_addressed' || verdict === 'not_applicable') return null;
+  const topic = clause.topic ?? clause.clauseNo;
+  const parts: string[] = [];
+  if (clause.markers.includes('R')) {
+    parts.push(`Записи: переглянути заповнені журнали «${topic}» за останні 12 місяців — дати, підписи, вжиті дії.`);
+  }
+  if (clause.markers.includes('O')) {
+    parts.push(`Огляд: на місці переконатися, що «${topic}» виконується так, як описано в процедурі.`);
+  }
+  return parts.length > 0 ? parts.join('\n') : null;
+}
+
 export const FINDINGS: FindingDto[] = (() => {
   const out: FindingDto[] = [];
   let findingId = 5000;
@@ -549,11 +655,15 @@ export const FINDINGS: FindingDto[] = (() => {
         gap:
           verdict === 'compliant'
             ? null
-            : `Не показано, як саме виробництво виконує «${clause.topic ?? clause.clauseNo}» — бракує запису, що підтверджує виконання.`,
+            : provenOutsideDocument(clause)
+              ? // Записи й огляд документ не замінить (judge.v2) — прогалина лише в процедурі.
+                `У процедурі не визначено частоту й відповідального для «${clause.topic ?? clause.clauseNo}».`
+              : `Не показано, як саме виробництво виконує «${clause.topic ?? clause.clauseNo}» — бракує запису, що підтверджує виконання.`,
         recommendation:
           verdict === 'compliant'
             ? null
             : 'Додати до процедури пункт із частотою, відповідальним і формою запису; додати приклад заповненого запису як доказ.',
+        outsideEvidence: mockOutsideEvidence(clause, verdict),
         createdAt: '2026-08-28T12:20:00.000Z',
         evidence,
         review:
@@ -591,6 +701,7 @@ export const FINDINGS: FindingDto[] = (() => {
         rationale: RATIONALES.not_addressed[0] ?? '',
         gap: `Жоден із трьох документів не описує «${clause.topic ?? clause.clauseNo}».`,
         recommendation: 'Створити або доповнити SOP, який покриває цю вимогу, і додати його до набору аудиту.',
+        outsideEvidence: null,
         createdAt: '2026-08-28T12:33:00.000Z',
         evidence: [],
         review: null,
@@ -883,12 +994,9 @@ export function buildRecentSpend(limit = 50): SpendEntry[] {
 // ─── Налаштування й провайдери ───────────────────────────────────────────────
 
 export const SETTINGS: AppSettings = {
+  // Решта етапів — на вбудованій маршрутизації (OpenRouter), один перевизначений —
+  // щоб на екрані було видно і позначку «типово», і власний вибір.
   routing: {
-    clause_extract: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' },
-    spec_summary: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-    doc_profile: { provider: 'anthropic', model: 'claude-haiku-4-5' },
-    judge: { provider: 'anthropic', model: 'claude-opus-5-5', effort: 'high' },
-    // Змішана маршрутизація — щоб на екрані було видно обидва провайдери.
     critic: { provider: 'openrouter', model: 'openai/gpt-6-luna', effort: 'medium' },
   },
   concurrency: 4,

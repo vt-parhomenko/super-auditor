@@ -11,7 +11,6 @@ import {
   choiceWithProvider,
   effortChoices,
   findModel,
-  STAGE_DEFAULT_PROVIDER,
   formatContextWindow,
   formatUsdPerMTok,
   groupModels,
@@ -233,29 +232,26 @@ export function ModelPicker({ value, providers, onChange, label, allowDefault = 
 export function ModelHint({
   value,
   providers,
+  isDefault = false,
 }: {
   value: ModelChoice | null;
   providers: readonly ProviderStatus[];
+  /** Етап нічого не перевизначає — показана модель вбудованої маршрутизації. */
+  isDefault?: boolean;
 }) {
   const t = useT();
   const labels = useLabels();
   const provider = providers.find((p) => p.id === displayedProviderId(value, providers));
   const modelId = value?.model ?? '';
+  const defaultChip = isDefault ? <span className="chip">{t.settings.hintIsDefault}</span> : null;
 
-  if (!modelId) {
-    const providerDefault = value?.provider && value.provider !== STAGE_DEFAULT_PROVIDER;
-    return (
-      <div className="model-hint">
-        {providerDefault ? t.settings.hintProviderDefault(provider?.label ?? value.provider) : t.settings.hintDefault}
-      </div>
-    );
-  }
+  if (!modelId) return <div className="model-hint">{t.settings.hintDefault}</div>;
 
   const info = findModel(provider, modelId);
   if (!info) {
     return (
       <div className="model-hint" title={modelId}>
-        <span className="mono">{modelId}</span> · {t.settings.hintNotInCatalogue}
+        {defaultChip} <span className="mono">{modelId}</span> · {t.settings.hintNotInCatalogue}
       </div>
     );
   }
@@ -273,7 +269,7 @@ export function ModelHint({
 
   return (
     <div className="model-hint" title={`${info.id} · ${text}`}>
-      <span className="mono">{info.id}</span> · {text}
+      {defaultChip} <span className="mono">{info.id}</span> · {text}
     </div>
   );
 }

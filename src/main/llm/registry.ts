@@ -6,7 +6,7 @@
  * зберігаються через передані `loadCatalogue`/`saveCatalogue`.
  */
 
-import { isEffort, type ModelInfo, type ModelRef, type Stage } from '@shared/domain';
+import { DEFAULT_ROUTING, isEffort, stageDefaultModel, type ModelInfo, type ModelRef, type Stage } from '@shared/domain';
 import type { AppSettings, ProviderBalance, ProviderStatus } from '@shared/ipc';
 import { bindModel } from './binding';
 import { LlmCloudBlockedError, LlmNotConfiguredError, LlmUnsupportedError } from './errors';
@@ -21,14 +21,11 @@ import {
 import type { StoredOpenRouterCatalogue } from './providers/openrouterCatalogue';
 import type { LlmProvider } from './types';
 
-/** Маршрутизація за замовчуванням. Переозначається через `AppSettings.routing`. */
-export const DEFAULT_ROUTING: Record<Stage, ModelRef> = {
-  clause_extract: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-  spec_summary: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-  doc_profile: { provider: 'anthropic', model: 'claude-haiku-4-5' },
-  judge: { provider: 'anthropic', model: 'claude-opus-5', effort: 'high' },
-  critic: { provider: 'anthropic', model: 'claude-opus-5', effort: 'high' },
-};
+/**
+ * Маршрутизація за замовчуванням (OpenRouter: Sonnet / Haiku / Opus 5.5) живе в
+ * `@shared/domain`, щоб інтерфейс показував ті самі моделі. Тут — реекспорт.
+ */
+export { DEFAULT_ROUTING };
 
 /** Модель провайдера за замовчуванням — для етапу, де вибрано лише провайдера. */
 export type DefaultModelLookup = (providerId: string) => string | null | undefined;
@@ -37,11 +34,11 @@ export type DefaultModelLookup = (providerId: string) => string | null | undefin
  * Зливає DEFAULT_ROUTING з користувацьким переозначенням.
  * Пріоритет: конфігурація прогону → Налаштування → дефолт етапу.
  *
- * Якщо вибрано іншого провайдера, але модель лишилась порожньою, беремо
- * модель за замовчуванням САМЕ цього провайдера — id Anthropic під
- * OpenRouter (`openrouter` + `claude-opus-5`) був би невалідним. Невідомий
- * провайдер без моделі отримує порожній id — `resolveProvider` однаково
- * зупиниться на «невідомий провайдер». Невалідний effort відкидається.
+ * Якщо вибрано провайдера, але модель лишилась порожньою, беремо типову модель
+ * ЕТАПУ в цього провайдера (Opus для судження, Haiku для профілю), далі — модель
+ * провайдера за замовчуванням: id одного провайдера під іншим був би невалідним.
+ * Невідомий провайдер без моделі отримує порожній id — `resolveProvider`
+ * однаково зупиниться на «невідомий провайдер». Невалідний effort відкидається.
  */
 export function resolveRouting(
   stage: Stage,
@@ -58,6 +55,7 @@ export function resolveRouting(
   const provider = nonEmpty(source.provider) ?? fallback.provider;
   const model =
     nonEmpty(source.model) ??
+    stageDefaultModel(provider, stage) ??
     (provider === fallback.provider ? fallback.model : (nonEmpty(defaultModelFor?.(provider)) ?? ''));
 
   const ref: ModelRef = { provider, model };
@@ -262,18 +260,8 @@ export function createDefaultRegistry(options: RegistryOptions): ProviderRegistr
   const registry = new ProviderRegistry(options);
   const load = (providerId: string) => () => options.loadCatalogue?.(providerId);
 
-  // Порядок має значення: Anthropic першим — це дефолтний провайдер маршрутизації.
-  if (!registry.get(ANTHROPIC_PROVIDER_ID)) {
-    registry.register(
-      new AnthropicProvider({
-        getApiKey: () => options.getApiKey(ANTHROPIC_PROVIDER_ID),
-        loadCatalogue: load(ANTHROPIC_PROVIDER_ID),
-        saveCatalogue: (value: StoredAnthropicCatalogue) => options.saveCatalogue?.(ANTHROPIC_PROVIDER_ID, value),
-        ...(options.now ? { now: options.now } : {}),
-      }),
-    );
-  }
-
+  // Порядок має значення: першим іде провайдер маршрутизації за замовчуванням
+  // (OpenRouter) — у такому порядку провайдери показуються в Налаштуваннях.
   if (options.openRouter !== false && !registry.get(OPENROUTER_PROVIDER_ID)) {
     registry.register(
       new OpenRouterProvider({
@@ -285,6 +273,17 @@ export function createDefaultRegistry(options: RegistryOptions): ProviderRegistr
         allowNetwork: options.openRouter?.allowNetwork ?? options.allowNetwork === true,
         loadCatalogue: load(OPENROUTER_PROVIDER_ID),
         saveCatalogue: (value: StoredOpenRouterCatalogue) => options.saveCatalogue?.(OPENROUTER_PROVIDER_ID, value),
+      }),
+    );
+  }
+
+  if (!registry.get(ANTHROPIC_PROVIDER_ID)) {
+    registry.register(
+      new AnthropicProvider({
+        getApiKey: () => options.getApiKey(ANTHROPIC_PROVIDER_ID),
+        loadCatalogue: load(ANTHROPIC_PROVIDER_ID),
+        saveCatalogue: (value: StoredAnthropicCatalogue) => options.saveCatalogue?.(ANTHROPIC_PROVIDER_ID, value),
+        ...(options.now ? { now: options.now } : {}),
       }),
     );
   }

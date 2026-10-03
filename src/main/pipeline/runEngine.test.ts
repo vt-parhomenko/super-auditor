@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, type Db } from '@main/db';
 import { mainMessages } from '@main/i18n';
 import { LlmError } from '@main/llm';
-import type { CompleteRequest, CompleteResult, LlmProvider, ReportFinding } from '@main/llm';
+import type { CompleteRequest, CompleteResult, LlmProvider, ReportFindingV2 as ReportFinding } from '@main/llm';
 import type { ResultsLanguage, RunConfig } from '@shared/domain';
 import { CRITIC_STAGE, JUDGE_STAGE, executeRun, planRun } from './runEngine';
 
@@ -522,6 +522,116 @@ describe('прохід критика', () => {
     expect(report.criticTasks).toBe(0);
     expect(db.runTasks.list(runId).filter((t) => t.stage === CRITIC_STAGE)).toHaveLength(0);
     expect(db.findings.listByRun(runId).every((f) => f.verdict === 'compliant')).toBe(true);
+  });
+});
+
+// ─── Позначки стандарту ──────────────────────────────────────────────────────
+
+describe('позначки стандарту (judge.v2 / critic.v2)', () => {
+  const LEGEND = [
+    { code: 'P', label: 'Policy / procedure', meaning: 'The site must have a documented policy/procedure' },
+    { code: 'R', label: 'Records', meaning: 'The site must have accurately completed records' },
+    { code: 'O', label: 'Observation', meaning: 'Compliance will be verified through observation of the site' },
+  ];
+
+  /** Вимоги секції 10 — з позначками Tesco, версія — з легендою. */
+  function markTesco(): void {
+    const [c101, c102] = db.clauses.list(s.specVersionId);
+    db.clauses.patch(c101!.id, { markers: ['P', 'R'] });
+    db.clauses.patch(c102!.id, { markers: ['P', 'O'] });
+    db.specs.setMarkerLegend(s.specVersionId, LEGEND);
+  }
+
+  it('судження отримує позначки вимог і легенду; прогін пише версію judge.v2', async () => {
+    markTesco();
+    const requests: Array<CompleteRequest<unknown>> = [];
+    const { runId } = planRun(db, config(), { ...MODELS, promptVersion: 'judge.v2' });
+    await executeRun({ db, judge: fakeProvider('judge', { requests }) }, runId, { concurrency: 1 });
+
+    const section10 = requests.find((r) => r.messages[0]?.content.includes('no="10.1"'));
+    expect(section10?.promptVersion).toBe('judge.v2');
+    expect(section10?.messages[0]?.content).toContain('markers="P, R"');
+    expect(section10?.messages[0]?.content).toContain('markers="P, O"');
+    expect(section10?.cachedPrefix).toContain('<marker_legend count="3">');
+    // Вимога без позначок — без атрибута.
+    const section12 = requests.find((r) => r.messages[0]?.content.includes('no="12.1"'));
+    expect(section12?.messages[0]?.content).not.toContain('markers=');
+    expect(section10?.cacheInput).toMatchObject({ markerLegend: LEGEND });
+  });
+
+  it('стандарт без позначок — у запиті ні легенди, ні атрибутів', async () => {
+    const requests: Array<CompleteRequest<unknown>> = [];
+    const { runId } = planRun(db, config(), MODELS);
+    await executeRun({ db, judge: fakeProvider('judge', { requests }) }, runId, { concurrency: 1 });
+
+    for (const req of requests) {
+      expect(req.cachedPrefix).not.toContain('marker_legend');
+      expect(req.messages[0]?.content).not.toContain('markers=');
+    }
+  });
+
+  it('outside_evidence стає outsideEvidence; порожній рядок — null', async () => {
+    markTesco();
+    const { runId } = planRun(db, config(), MODELS);
+    const judge = fakeProvider('judge', {
+      judge: (nos) =>
+        nos.map((no) =>
+          finding({
+            clause_no: no,
+            outside_evidence: no === '10.1' ? '  Inspect the signed visit reports.  ' : no === '10.2' ? '   ' : undefined,
+          }),
+        ),
+    });
+
+    await executeRun({ db, judge }, runId, { concurrency: 1 });
+
+    const byClause = new Map(db.findings.listByRun(runId).map((f) => [f.clause.clauseNo, f]));
+    expect(byClause.get('10.1')?.outsideEvidence).toBe('Inspect the signed visit reports.');
+    expect(byClause.get('10.2')?.outsideEvidence).toBeNull();
+    expect(byClause.get('12.1')?.outsideEvidence).toBeNull();
+    // Записи поза документом — не причина знижувати: compliant лишається compliant.
+    expect(byClause.get('10.1')?.verdict).toBe('compliant');
+  });
+
+  it('критик бачить позначки, лише свої пункти легенди і висновок «поза документом»', async () => {
+    markTesco();
+    const requests: Array<CompleteRequest<unknown>> = [];
+    const { runId } = planRun(db, config(), MODELS);
+    const judge = fakeProvider('judge', {
+      judge: (nos) =>
+        nos.map((no) => finding({ clause_no: no, outside_evidence: no === '10.1' ? 'Inspect the records.' : undefined })),
+    });
+    const critic = fakeProvider('critic', { critic: { agree: true }, requests });
+
+    await executeRun({ db, judge, critic }, runId, { concurrency: 1 });
+
+    const for101 = requests.find((r) => r.messages[0]?.content.includes('no="10.1"'));
+    expect(for101?.promptVersion).toBe('critic.v2');
+    const user = for101?.messages[0]?.content ?? '';
+    expect(user).toContain('<clause no="10.1" markers="P, R">');
+    expect(user).toContain('<marker_legend count="2">');
+    expect(user).toContain('label="Records"');
+    expect(user).not.toContain('label="Observation"');
+    expect(user).toContain('<claimed_outside_evidence>\nInspect the records.\n</claimed_outside_evidence>');
+
+    // Вимога без позначок — критик без легенди.
+    const for121 = requests.find((r) => r.messages[0]?.content.includes('no="12.1"'));
+    expect(for121?.messages[0]?.content).not.toContain('marker_legend');
+  });
+
+  it('незгода критика зберігає «перевірити поза документом»', async () => {
+    markTesco();
+    const { runId } = planRun(db, config(), MODELS);
+    const judge = fakeProvider('judge', {
+      judge: (nos) => nos.map((no) => finding({ clause_no: no, outside_evidence: `Verify records for ${no}.` })),
+    });
+    const critic = fakeProvider('critic', { critic: { agree: false, reason: 'The bullets are not all covered.' } });
+
+    await executeRun({ db, judge, critic }, runId, { concurrency: 1 });
+
+    const f101 = db.findings.listByRun(runId).find((f) => f.clause.clauseNo === '10.1');
+    expect(f101?.verdict).toBe('needs_human_review');
+    expect(f101?.outsideEvidence).toBe('Verify records for 10.1.');
   });
 });
 

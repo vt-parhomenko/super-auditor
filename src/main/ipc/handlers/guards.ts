@@ -11,13 +11,16 @@
  */
 
 import type { Db } from '@main/db';
-import type {
-  AuditRunDto,
-  ClauseDto,
-  DocumentVersionDto,
-  SiteProfileDto,
-  SpecVersionDto,
-  SpecificationDto,
+import {
+  MARKER_MAX_COUNT,
+  MARKER_MAX_LENGTH,
+  normalizeMarkers,
+  type AuditRunDto,
+  type ClauseDto,
+  type DocumentVersionDto,
+  type SiteProfileDto,
+  type SpecVersionDto,
+  type SpecificationDto,
 } from '@shared/domain';
 import { notFound, validation } from '../errors';
 
@@ -26,6 +29,26 @@ export function requireId(value: unknown, label: string): number {
     throw validation((m) => m.ipc.invalidId(label, String(JSON.stringify(value))));
   }
   return value;
+}
+
+/**
+ * Позначки стандарту біля вимоги: масив непорожніх рядків, не більше
+ * `MARKER_MAX_COUNT`, кожен не довший за `MARKER_MAX_LENGTH`. Порушення —
+ * помилка, а не тихе обрізання: людина має побачити, що її правку не прийнято.
+ * Повертає нормалізований список (пробіли обрізано, дублі прибрано).
+ */
+export function requireMarkers(value: unknown): string[] {
+  const invalid = () =>
+    validation((m) => m.clauseEditing.markersInvalid(MARKER_MAX_COUNT, MARKER_MAX_LENGTH));
+  if (!Array.isArray(value) || value.length > MARKER_MAX_COUNT) throw invalid();
+  const items: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') throw invalid();
+    const marker = item.replace(/\s+/g, ' ').trim();
+    if (marker.length === 0 || marker.length > MARKER_MAX_LENGTH) throw invalid();
+    items.push(marker);
+  }
+  return normalizeMarkers(items);
 }
 
 export function requireRun(db: Db, runId: number): AuditRunDto {

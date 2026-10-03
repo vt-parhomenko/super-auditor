@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!--
+    Super Auditor — іконка застосунку, детальний майстер (48 px і більше).
+    Документ, чий виділений рядок (дослівна цитата) підтверджує зелена печатка
+    перевірки. Для 16/24/32 px — окремі майстри icon-16/24/32.svg: менше деталей
+    і прямі краї на цілих пікселях, бо зменшена детальна версія там розмивається.
+    icon.png (1024) та icon.ico (16–256) растеризовано з цих SVG.
+  -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a8cfa"/>
+      <stop offset="0.55" stop-color="#2f5fd0"/>
+      <stop offset="1" stop-color="#2146ae"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="sheet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef3fd"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c3d3f6"/>
+      <stop offset="1" stop-color="#e4ecfc"/>
+    </linearGradient>
+    <linearGradient id="seal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3ed69a"/>
+      <stop offset="1" stop-color="#0d9663"/>
+    </linearGradient>
+    <filter id="tileShadow" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0b1a45" flood-opacity="0.32"/>
+    </filter>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0a1a52" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Плитка -->
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#tile)" filter="url(#tileShadow)"/>
+  <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#gloss)"/>
+  <rect x="12.75" y="12.75" width="230.5" height="230.5" rx="53.25" fill="none" stroke="#0b1f63" stroke-opacity="0.25" stroke-width="1.5"/>
+
+  <!-- Аркуш і біле кільце печатки — один силует, тож і тінь від них одна -->
+  <g filter="url(#lift)">
+    <path d="M59 39H129L161 71V179A12 12 0 0 1 149 191H59A12 12 0 0 1 47 179V51A12 12 0 0 1 59 39Z" fill="url(#sheet)"/>
+    <circle cx="163" cy="171" r="47" fill="#ffffff"/>
+  </g>
+
+  <!-- Загнутий кут -->
+  <path d="M129 39V61A10 10 0 0 0 139 71H161Z" fill="url(#fold)"/>
+
+  <!-- Рядки тексту; виділений зеленим — цитата, на якій тримається вердикт -->
+  <rect x="65" y="58" width="44" height="10" rx="5" fill="#2f5fd0"/>
+  <rect x="65" y="82" width="76" height="8" rx="4" fill="#c5d2ee"/>
+  <rect x="59" y="98" width="92" height="20" rx="6" fill="#cdf3e0"/>
+  <rect x="65" y="104" width="80" height="8" rx="4" fill="#25b47a"/>
+  <rect x="65" y="126" width="70" height="8" rx="4" fill="#c5d2ee"/>
+  <rect x="65" y="144" width="48" height="8" rx="4" fill="#c5d2ee"/>
+  <rect x="65" y="162" width="36" height="8" rx="4" fill="#c5d2ee"/>
+
+  <!-- Печатка -->
+  <circle cx="163" cy="171" r="38" fill="url(#seal)"/>
+  <path d="M145 172L157 184L181 158" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

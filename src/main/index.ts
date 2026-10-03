@@ -1,5 +1,13 @@
+/// <reference types="electron-vite/node" />
+// ↑ типи для `?asset`-імпортів: electron-vite їх постачає, але tsconfig.node
+//   не підключає `electron-vite/node` через `types`.
 import { app, BrowserWindow, shell } from 'electron';
 import { join } from 'node:path';
+// `?asset&asarUnpack`: electron-vite підставляє шлях відносно out/main, тож він
+// однаковий у dev і в збірці; у збірці веде в app.asar.unpacked (див.
+// `asarUnpack` у package.json) — системний завантажувач .ico читає звичайний файл.
+import iconIco from '../../resources/icon.ico?asset&asarUnpack';
+import iconPng from '../../resources/icon.png?asset&asarUnpack';
 import { createDb, type Db } from './db';
 import { DEFAULT_LANGUAGE, mainMessages, uiLanguageOf } from './i18n';
 import { installIpc, type InstalledIpc } from './ipc';
@@ -20,6 +28,11 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#12131a',
+    // Windows: з .ico Electron бере кадр рівно під системний розмір (16/24/32/48
+    // залежно від масштабу) — це вручну вивірені кадри, а не зменшений PNG 1024.
+    // У dev без цього в панелі задач була б іконка electron.exe.
+    // macOS опцію ігнорує (іконка з бандла), Linux бере PNG.
+    icon: process.platform === 'win32' ? iconIco : iconPng,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

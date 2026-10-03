@@ -2,6 +2,7 @@ import { useParams } from 'react-router-dom';
 
 import { SEVERITIES, VERDICTS } from '@shared/domain';
 import { HeatmapLegend } from '@renderer/components/CoverageHeatmap';
+import { Labeled } from '@renderer/components/InfoTip';
 import { ProgressBar, Stat } from '@renderer/components/Meters';
 import { QueryState } from '@renderer/components/States';
 import { useRun, useRunSummary } from '@renderer/hooks/useRuns';
@@ -38,39 +39,54 @@ export function SummaryTab() {
                     label={t.summary.clausesApplicable}
                     value={formatNumber(s.clausesApplicable)}
                     sub={t.summary.clausesApplicableSub}
+                    hint={t.summary.clausesApplicableHint}
                   />
                   <Stat
                     label={t.summary.assessed}
                     value={formatNumber(s.clausesAssessed)}
-                    sub={formatPercent(s.clausesAssessed, s.clausesApplicable)}
+                    sub={t.summary.assessedSub(formatPercent(s.clausesAssessed, s.clausesApplicable))}
+                    hint={t.summary.assessedHint}
                   />
                   <Stat
                     label={t.summary.gaps}
                     value={formatNumber(s.gaps)}
                     sub={t.summary.gapsSub}
                     tone="v-not_addressed"
+                    hint={t.summary.gapsHint}
                   />
                   <Stat
                     label={t.summary.grade}
                     value={s.grade ? s.grade.value : '—'}
                     sub={s.grade?.label ?? t.summary.gradeSub}
                     tone={s.grade && s.grade.value >= 4 ? 'v-compliant' : s.grade && s.grade.value <= 1 ? 'v-non_compliant' : 'v-partial'}
+                    hint={t.summary.gradeHint}
                   />
                 </div>
               </section>
 
               <section className="col" style={{ gap: 'var(--sp-2)' }}>
-                <span className="section-title">{t.summary.verdicts}</span>
+                <Labeled className="section-title" label={t.summary.verdicts} hint={t.summary.verdictsHint} />
                 <div className="stat-grid">
                   {VERDICTS.map((v) => (
-                    <Stat key={v} label={labels.verdict[v]} value={formatNumber(s.counts[v])} tone={`v-${v}`} />
+                    <Stat
+                      key={v}
+                      label={labels.verdict[v]}
+                      value={formatNumber(s.counts[v])}
+                      tone={`v-${v}`}
+                      // «Не розглянуто» — найчастіше джерело хибної тривоги: пояснюємо, що це не порушення.
+                      hint={
+                        v === 'not_addressed'
+                          ? `${labels.verdictHint[v]} ${t.summary.notAddressedNote}`
+                          : labels.verdictHint[v]
+                      }
+                    />
                   ))}
                 </div>
                 <HeatmapLegend />
               </section>
 
               <section className="col" style={{ gap: 'var(--sp-2)' }}>
-                <span className="section-title">{t.summary.severity}</span>
+                <Labeled className="section-title" label={t.summary.severity} hint={t.summary.severityHint} />
                 <div className="stat-grid">
                   {SEVERITIES.map((sev) => (
                     <Stat key={sev} label={labels.severity[sev]} value={formatNumber(s.severityCounts[sev])} />

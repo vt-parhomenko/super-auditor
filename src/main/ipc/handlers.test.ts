@@ -14,7 +14,7 @@ import type {
   ImportResult,
   SiteProfileDto,
 } from '@shared/domain';
-import type { ProviderStatus } from '@shared/ipc';
+import type { LibraryDeleteImpact, ProviderStatus } from '@shared/ipc';
 import { seed, type SeedResult } from '@main/db/fixtures';
 import { DOC_RECEIVING } from '@main/ingest/fixtures';
 import { blobPath, setStorageRoot } from '@main/paths';
@@ -138,30 +138,48 @@ describe('бібліотека документів', () => {
     expect(emitted.filter((e) => e.event === 'library:changed')).toHaveLength(1);
 
     const spare = fixture.db.documents.create({ title: 'Тимчасовий SOP', kind: 'other' });
-    await invoke('documents:delete', spare.id);
+    await invoke('library:delete', { kind: 'document', id: spare.id });
     expect(await invoke<DocumentDto[]>('documents:list')).toHaveLength(2);
   });
 
-  it('не дає видалити документ, який уже брав участь у прогоні', async () => {
-    const message = await expectCode(
-      invoke('documents:delete', fixture.damagedDocId),
-      'VALIDATION',
-    );
-    expect(message).toContain('is used in 1 run');
+  it('документ, який брав участь у перевірці, видаляється разом із нею', async () => {
+    // Раніше `documents:delete` тут відмовляв. Тепер ціну показують заздалегідь,
+    // а перевірка, що охоплювала й інший документ, зникає повністю.
+    const impact = await invoke<LibraryDeleteImpact>('library:deleteImpact', {
+      kind: 'document',
+      id: fixture.damagedDocId,
+    });
+    expect(impact.runs).toEqual([
+      expect.objectContaining({ id: fixture.runId, documentCount: 2, otherDocuments: 1 }),
+    ]);
 
-    // Та сама відмова мовою інтерфейсу, яку renderer синхронізував у налаштування.
-    await invoke('settings:set', { uiLanguage: 'uk' });
-    const ukrainian = await expectCode(
-      invoke('documents:delete', fixture.damagedDocId),
-      'VALIDATION',
-    );
-    expect(ukrainian).toContain('використано у прогонах');
+    fixture.db.runs.setStatus(fixture.runId, 'done');
+    const done = await invoke<LibraryDeleteImpact>('library:delete', {
+      kind: 'document',
+      id: fixture.damagedDocId,
+    });
+    expect(done.runs.map((run) => run.id)).toEqual([fixture.runId]);
+    expect(await invoke('documents:get', fixture.damagedDocId)).toBeNull();
+    expect(await invoke('runs:get', fixture.runId)).toBeNull();
+    expect(emitted).toContainEqual({ event: 'library:changed', payload: { kind: 'documents' } });
   });
 
   it('NOT_FOUND для неіснуючого id', async () => {
     expect(await invoke('documents:get', 4242)).toBeNull();
     await expectCode(invoke('documents:update', 4242, { title: 'x' }), 'NOT_FOUND');
-    await expectCode(invoke('documents:delete', 4242), 'NOT_FOUND');
+    await expectCode(invoke('library:delete', { kind: 'document', id: 4242 }), 'NOT_FOUND');
+    await expectCode(invoke('library:deleteImpact', { kind: 'documentVersion', id: 4242 }), 'NOT_FOUND');
+  });
+
+  it('кривий запит на видалення — VALIDATION мовою інтерфейсу', async () => {
+    const message = await expectCode(invoke('library:delete', { kind: 'blob', id: 1 }), 'VALIDATION');
+    expect(message).toContain('expected a specification');
+    await expectCode(invoke('library:deleteImpact', { kind: 'document', id: -1 }), 'VALIDATION');
+    await expectCode(invoke('library:deleteImpact', null), 'VALIDATION');
+
+    await invoke('settings:set', { uiLanguage: 'uk' });
+    const ukrainian = await expectCode(invoke('library:delete', 'документ'), 'VALIDATION');
+    expect(ukrainian).toContain('Немає що видаляти');
   });
 
   it('VALIDATION для явно кривого id', async () => {
@@ -215,6 +233,47 @@ describe('реєстр вимог', () => {
       invoke('clauses:create', fixture.specVersionId, { clauseNo: '', requirementText: 'x' }),
       'VALIDATION',
     );
+  });
+
+  it('позначки стандарту: patch і create нормалізують коректні, відхиляють биті', async () => {
+    const clauses = await invoke<ClauseDto[]>('clauses:list', fixture.specVersionId);
+    const first = clauses[0]!;
+
+    const patched = await invoke<ClauseDto>('clauses:patch', first.id, { markers: [' P ', 'Major  Must', 'P'] });
+    expect(patched.markers).toEqual(['P', 'Major Must']);
+    const cleared = await invoke<ClauseDto>('clauses:patch', first.id, { markers: [] });
+    expect(cleared.markers).toEqual([]);
+
+    const invalid: unknown[] = [
+      'P',
+      [''],
+      ['   '],
+      [42],
+      ['x'.repeat(41)],
+      Array.from({ length: 9 }, (_, i) => `M${i}`),
+    ];
+    for (const markers of invalid) {
+      await expectCode(invoke('clauses:patch', first.id, { markers }), 'VALIDATION');
+    }
+    // Відхилена правка нічого не записала.
+    expect((await invoke<ClauseDto>('clauses:get', first.id)).markers).toEqual([]);
+
+    const created = await invoke<ClauseDto>('clauses:create', fixture.specVersionId, {
+      clauseNo: 'AF 1.1.1',
+      requirementText: 'Is there a reference system for each field?',
+      markers: ['Major Must'],
+    });
+    expect(created.markers).toEqual(['Major Must']);
+    const message = await expectCode(
+      invoke('clauses:create', fixture.specVersionId, {
+        clauseNo: 'AF 1.1.2',
+        requirementText: 'Is there a recording system?',
+        markers: [''],
+      }),
+      'VALIDATION',
+    );
+    expect(message).toContain('at most 8 short codes');
+    await invoke('clauses:delete', created.id);
   });
 
   it('markReviewed проходить, коли всі вимоги підтверджені', async () => {
@@ -531,14 +590,14 @@ describe('налаштування', () => {
 
 describe('провайдери', () => {
   it('ключ ніколи не повертається в renderer', async () => {
+    const anthropicOf = (list: ProviderStatus[]) => list.find((p) => p.id === 'anthropic');
     const before = await invoke<ProviderStatus[]>('providers:list');
-    expect(before[0]?.id).toBe('anthropic');
-    expect(before[0]?.configured).toBe(false);
+    expect(anthropicOf(before)?.configured).toBe(false);
 
     await invoke('providers:setApiKey', 'anthropic', 'sk-ant-секретне-значення');
 
     const after = await invoke<ProviderStatus[]>('providers:list');
-    expect(after[0]?.configured).toBe(true);
+    expect(anthropicOf(after)?.configured).toBe(true);
     expect(JSON.stringify(after)).not.toContain('sk-ant');
 
     // Перевірка без мережі: підтверджує лише наявність ключа.
@@ -547,7 +606,7 @@ describe('провайдери', () => {
     expect(test.message).not.toContain('sk-ant');
 
     await invoke('providers:clearApiKey', 'anthropic');
-    expect((await invoke<ProviderStatus[]>('providers:list'))[0]?.configured).toBe(false);
+    expect(anthropicOf(await invoke<ProviderStatus[]>('providers:list'))?.configured).toBe(false);
 
     const unconfigured = await invoke<{ ok: boolean }>('providers:test', 'anthropic');
     expect(unconfigured.ok).toBe(false);

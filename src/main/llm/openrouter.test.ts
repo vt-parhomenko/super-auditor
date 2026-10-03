@@ -663,10 +663,35 @@ describe('complete — відмови й помилки', () => {
     expect(result.data.clauses).toHaveLength(1);
     expect(calls).toHaveLength(2);
 
-    const bad = await run([midStream(400)]);
+    // 400 не повторюється як збій транспорту — лише одна спроба без строгої схеми.
+    const bad = await run([midStream(400), midStream(400)]);
     expect(bad.error.kind).toBe('api');
     expect(bad.error.retryable).toBe(false);
-    expect(bad.calls).toHaveLength(1);
+    expect(bad.calls).toHaveLength(2);
+    expect(bad.calls[1]?.body.response_format).toEqual({ type: 'json_object' });
+  });
+
+  it('400 «Provider returned error» → одна спроба в json_object; у тексті — причина від постачальника', async () => {
+    const providerError = {
+      status: 400,
+      error: {
+        code: 400,
+        message: 'Provider returned error',
+        metadata: {
+          provider_name: 'Anthropic',
+          raw: JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'output_format: schema is not supported' } }),
+        },
+      },
+    };
+    const { fetchImpl, calls } = stubFetch([providerError, { sse: okStream(VALID_CLAUSES) }]);
+    const result = await make(fetchImpl).complete(req(), signal());
+    expect(result.data.clauses).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.body.response_format).toEqual({ type: 'json_object' });
+
+    // Якщо й без схеми відмова — у повідомленні видно, що сказав постачальник.
+    const failing = await run([providerError, providerError]);
+    expect(failing.error.message).toContain('Provider returned error — Anthropic: output_format: schema is not supported');
   });
 
   it('потік, що закрився без [DONE] і finish_reason, — обрив транспорту: повторюється', async () => {
@@ -730,7 +755,7 @@ describe('pricingFor і каталог', () => {
 
   it('models: модель за замовчуванням першою, далі каталог', () => {
     const provider = make(fetchImpl);
-    expect(provider.models[0]).toBe('anthropic/claude-sonnet-5');
+    expect(provider.models[0]).toBe('anthropic/claude-sonnet-5.5');
     expect(provider.models).toContain('anthropic/claude-opus-5.5');
     expect(new Set(provider.models).size).toBe(provider.models.length);
   });

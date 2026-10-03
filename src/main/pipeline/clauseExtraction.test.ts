@@ -5,13 +5,21 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createTestDb, type Db } from '@main/db';
 import { setStorageRoot } from '@main/paths';
 import { TESCO_SPEC } from '@main/ingest/fixtures';
-import { LlmError, type ClauseExtractItem } from '@main/llm';
+import { LlmError, type ClauseExtractV2Item, type MarkerLegendOutputItem } from '@main/llm';
 import type { CompleteRequest, CompleteResult, LlmProvider } from '@main/llm';
+import type { MarkerLegendItem } from '@shared/domain';
 import { importFiles } from './import';
 import {
+  LEGEND_FALLBACK_PAGES,
+  LEGEND_INTRO_MAX_CHARS,
+  distinctMarkers,
   extractClausesForSpec,
+  legendCovers,
+  legendSource,
   looksLikeClausePage,
   mergeContinuations,
+  reconcileLegend,
+  sectionOf,
   selectClausePages,
   validateClauses,
   type ExtractedClause,
@@ -21,20 +29,25 @@ import {
 
 interface FakeOptions {
   /** Що повернути для конкретної сторінки. Ключ — номер сторінки. */
-  byPage?: Record<number, ClauseExtractItem[]>;
+  byPage?: Record<number, ClauseExtractV2Item[]>;
   /** Сторінки, на яких провайдер має впасти. */
   failOn?: number[];
   /** Чим падати на `failOn`; за замовчуванням — звичайний Error. */
   failWith?: () => unknown;
-  fallback?: ClauseExtractItem[];
+  fallback?: ClauseExtractV2Item[];
+  /** Відповідь на виклик легенди позначок; за замовчуванням — «нічого не пояснено». */
+  legend?: MarkerLegendOutputItem[] | (() => never);
 }
 
-function fakeProvider(options: FakeOptions = {}): LlmProvider & { calls: number } {
+function fakeProvider(
+  options: FakeOptions = {},
+): LlmProvider & { calls: number; legendRequests: Array<CompleteRequest<unknown>> } {
   const provider = {
     id: 'fake',
     label: 'Fake',
     models: ['fake-model'],
     calls: 0,
+    legendRequests: [] as Array<CompleteRequest<unknown>>,
     caps: {
       contextWindow: 200_000,
       promptCaching: false,
@@ -47,6 +60,22 @@ function fakeProvider(options: FakeOptions = {}): LlmProvider & { calls: number 
     isConfigured: () => true,
     async complete<T>(req: CompleteRequest<T>): Promise<CompleteResult<T>> {
       provider.calls += 1;
+      if (req.promptVersion === 'marker_legend.v1') {
+        provider.legendRequests.push(req as CompleteRequest<unknown>);
+        const legend = options.legend;
+        const items = typeof legend === 'function' ? legend() : (legend ?? []);
+        return {
+          data: { items } as T,
+          citations: [],
+          usage: { input: 500, cachedInput: 0, cacheWrite: 0, output: 50 },
+          costUsd: 0.005,
+          modelId: 'fake-model',
+          providerId: 'fake',
+          latencyMs: 1,
+          raw: null,
+          fromCache: false,
+        };
+      }
       const pageNo = Number(/page\s+(\d+)/i.exec(req.messages[0]?.content ?? '')?.[1] ?? 0);
 
       if (options.failOn?.includes(pageNo)) {
@@ -70,19 +99,24 @@ function fakeProvider(options: FakeOptions = {}): LlmProvider & { calls: number 
   return provider;
 }
 
-function item(overrides: Partial<ClauseExtractItem> = {}): ClauseExtractItem {
+function item(overrides: Partial<ClauseExtractV2Item> = {}): ClauseExtractV2Item {
   return {
     clauseNo: '1.1',
     sectionNo: '1',
     sectionTitle: 'Leadership',
     topic: 'Management review',
     requirementText: 'Site management must regularly review all activities.',
-    modules: ['P', 'R'],
+    markers: ['P', 'R'],
     obligation: 'must',
     truncated: false,
     ...overrides,
-  } as ClauseExtractItem;
+  };
 }
+
+const TESCO_LEGEND_ANSWER: MarkerLegendOutputItem[] = [
+  { code: 'P', label: 'Policy / procedure', meaning: 'The site must have a documented policy/procedure.' },
+  { code: 'R', label: 'Records', meaning: 'The site must have accurately completed records.' },
+];
 
 // ─── Реальна специфікація ────────────────────────────────────────────────────
 
@@ -139,6 +173,67 @@ describe('looksLikeClausePage на реальному стандарті', () =>
 
   it('не вважає вимогами простий текст із числами', () => {
     expect(looksLikeClausePage('Revision 1.0 issued on 3.4 of the calendar.')).toBe(false);
+  });
+});
+
+describe('looksLikeClausePage на інших стандартах', () => {
+  it('ISO: сторінка прози з одним пунктом теж сторінка вимог', () => {
+    const text = [
+      '8.5.1 Control of production and service provision',
+      'The organization shall implement production and service provision under controlled conditions.',
+      'a) the availability of documented information;',
+    ].join('\n');
+    expect(looksLikeClausePage(text)).toBe(true);
+  });
+
+  it('додаток ISO 27001: номери A.5.1', () => {
+    const text = [
+      'A.5 Organizational controls',
+      'A.5.1 Policies for information security',
+      'Information security policy and topic-specific policies shall be defined.',
+    ].join('\n');
+    expect(looksLikeClausePage(text)).toBe(true);
+  });
+
+  it('GlobalG.A.P.: номери AF 1.2.3 і рівень «Major Must»', () => {
+    const text = [
+      'AF 1.1.1 Is there a reference system for each field? Major Must',
+      'AF 1.1.2 Is there a recording system? Minor Must',
+    ].join('\n');
+    expect(looksLikeClausePage(text)).toBe(true);
+  });
+
+  it('стандарт нідерландською: «moet»', () => {
+    expect(looksLikeClausePage('4.2 Documentatie\nDe organisatie moet een procedure hebben.')).toBe(true);
+  });
+
+  it('зміст без дієслів обов’язку — не сторінка вимог', () => {
+    const toc = ['4.1 Understanding the organization ........ 5', '4.2 Interested parties ........ 6'].join('\n');
+    expect(looksLikeClausePage(toc)).toBe(false);
+  });
+
+  it('номер сторінки чи пункт списку без крапки не вважається номером вимоги', () => {
+    expect(looksLikeClausePage('12\nThe site must keep records.')).toBe(false);
+    expect(looksLikeClausePage('1 The site must keep records.')).toBe(false);
+  });
+});
+
+describe('sectionOf', () => {
+  it.each([
+    ['10.3', '10'],
+    ['4.2.1', '4'],
+    ['A.5.1', 'A.5'],
+    ['A.5', 'A'],
+    ['AF 1.2.3', 'AF 1'],
+    ['FV 5.1.2', 'FV 5'],
+    ['100.1', '100'],
+  ])('%s → %s', (clauseNo, section) => {
+    expect(sectionOf(clauseNo)).toBe(section);
+  });
+
+  it('номер без крапки секції не має', () => {
+    expect(sectionOf('Requirements')).toBeNull();
+    expect(sectionOf('7')).toBeNull();
   });
 });
 
@@ -219,12 +314,21 @@ describe('mergeContinuations', () => {
 
   it('добирає порожні поля з продовження', () => {
     const merged = mergeContinuations([
-      { pageNo: 1, clauses: [item({ clauseNo: '4.1', topic: null, modules: [] })] },
-      { pageNo: 2, clauses: [item({ clauseNo: '4.1', topic: 'Training', modules: ['O'] })] },
+      { pageNo: 1, clauses: [item({ clauseNo: '4.1', topic: null, markers: [] })] },
+      { pageNo: 2, clauses: [item({ clauseNo: '4.1', topic: 'Training', markers: ['O'] })] },
     ]);
 
     expect(merged[0]?.topic).toBe('Training');
-    expect(merged[0]?.modules).toEqual(['O']);
+    expect(merged[0]?.markers).toEqual(['O']);
+  });
+
+  it('позначки з рядка, де вимога почалась, продовження не перезаписує', () => {
+    const merged = mergeContinuations([
+      { pageNo: 1, clauses: [item({ clauseNo: '4.2', markers: ['Major Must'] })] },
+      { pageNo: 2, clauses: [item({ clauseNo: '4.2', markers: ['Minor Must'] })] },
+    ]);
+
+    expect(merged[0]?.markers).toEqual(['Major Must']);
   });
 });
 
@@ -290,12 +394,148 @@ describe('validateClauses', () => {
     const report = validateClauses([extracted({ clauseNo: 'Requirements' })]);
     expect(report.issues.some((i) => i.kind === 'malformed_number')).toBe(true);
   });
+
+  it('буквено-цифрові номери інших стандартів — не «зіпсовані»', () => {
+    const report = validateClauses(
+      ['A.5.1', 'A.5.2', 'AF 1.1.1', 'AF 1.1.2', 'FV 5.1.2', '4.2.1', '10.3a', '7'].map((clauseNo) =>
+        extracted({ clauseNo }),
+      ),
+    );
+    expect(report.issues.filter((i) => i.kind === 'malformed_number')).toEqual([]);
+  });
+
+  it('ловить пропуск у нумерації додатка й GlobalG.A.P.', () => {
+    const report = validateClauses([
+      extracted({ clauseNo: 'A.5.1' }),
+      extracted({ clauseNo: 'A.5.3' }),
+      extracted({ clauseNo: 'AF 1.1.1' }),
+      extracted({ clauseNo: 'AF 1.1.4' }),
+    ]);
+
+    const gaps = report.issues.filter((i) => i.kind === 'numbering_gap');
+    expect(gaps.map((g) => g.clauseNo).sort()).toEqual(['A.5.3', 'AF 1.1.4']);
+    expect(gaps.find((g) => g.clauseNo === 'A.5.3')?.message).toContain('A.5.2');
+    expect(gaps.find((g) => g.clauseNo === 'AF 1.1.4')?.message).toContain('AF 1.1.2, AF 1.1.3');
+  });
+
+  it('заголовок без власного тексту (7.1.5 → 7.1.5.1) — не пропуск', () => {
+    const report = validateClauses(
+      ['7.1.4', '7.1.5.1', '7.1.5.2', '7.1.6'].map((clauseNo) => extracted({ clauseNo })),
+    );
+    expect(report.issues).toEqual([]);
+  });
+
+  it('пропуск на глибшому рівні позначає вимогу після пропуску', () => {
+    const report = validateClauses(
+      ['7.1.4', '7.1.6.1'].map((clauseNo) => extracted({ clauseNo })),
+    );
+    const gap = report.issues.find((i) => i.kind === 'numbering_gap');
+    expect(gap?.clauseNo).toBe('7.1.6.1');
+    expect(gap?.message).toContain('7.1.5');
+  });
+
+  it('великий пропуск не роздуває повідомлення', () => {
+    const report = validateClauses([extracted({ clauseNo: '3.1' }), extracted({ clauseNo: '3.500' })]);
+    const gap = report.issues.find((i) => i.kind === 'numbering_gap');
+    expect(gap?.message).toContain('3.2, 3.3, 3.4, 3.5, 3.6… (498)');
+  });
+
+  it('літерні підпункти й секції без номера не ламають перевірку', () => {
+    const report = validateClauses(
+      ['10.3', '10.3a', '10.4', 'AF 1', 'A'].map((clauseNo) => extracted({ clauseNo })),
+    );
+    expect(report.issues.filter((i) => i.kind === 'numbering_gap')).toEqual([]);
+  });
+});
+
+// ─── Легенда позначок ────────────────────────────────────────────────────────
+
+describe('distinctMarkers', () => {
+  it('різні позначки в порядку першої появи', () => {
+    expect(
+      distinctMarkers([{ markers: ['R', 'O'] }, { markers: [] }, { markers: ['P', 'R'] }]),
+    ).toEqual(['R', 'O', 'P']);
+  });
+});
+
+describe('legendSource', () => {
+  const pages = Array.from({ length: 20 }, (_, i) => `text of page ${i + 1}`);
+
+  it('сторінки до першої сторінки з вимогами', () => {
+    const source = legendSource(pages, 12);
+    expect(source).toMatchObject({ pageFrom: 1, pageTo: 11 });
+    expect(source?.text).toContain('--- page 11 ---\ntext of page 11');
+    expect(source?.text).not.toContain('page 12');
+  });
+
+  it('вимоги з першої сторінки — перші LEGEND_FALLBACK_PAGES сторінок', () => {
+    expect(legendSource(pages, 1)).toMatchObject({ pageFrom: 1, pageTo: LEGEND_FALLBACK_PAGES });
+    expect(legendSource(pages.slice(0, 3), 1)?.pageTo).toBe(3);
+  });
+
+  it('обрізається з явною позначкою', () => {
+    const long = Array.from({ length: 30 }, () => 'x'.repeat(5_000));
+    const source = legendSource(long, 30);
+    expect(source?.text.length).toBeLessThan(LEGEND_INTRO_MAX_CHARS + 200);
+    expect(source?.text).toContain('truncated');
+  });
+});
+
+describe('reconcileLegend', () => {
+  it('код — у написанні реєстру, вигадані позначки відкинуто, непояснені — в кінці', () => {
+    const legend = reconcileLegend(
+      ['Major Must', 'Minor Must', 'Recommendation'],
+      [
+        { code: 'MINOR MUST', label: 'Minor Must', meaning: '95% of applicable Minor Musts must be complied with.' },
+        { code: 'Major  Must', label: 'Major Must', meaning: '100% compliance is required.' },
+        { code: 'Critical', label: 'Critical', meaning: 'Invented by the model.' },
+      ],
+    );
+    expect(legend).toEqual([
+      { code: 'Minor Must', label: 'Minor Must', meaning: '95% of applicable Minor Musts must be complied with.' },
+      { code: 'Major Must', label: 'Major Must', meaning: '100% compliance is required.' },
+      { code: 'Recommendation', label: 'Recommendation', meaning: null },
+    ]);
+  });
+
+  it('порожні label і meaning стають кодом і null', () => {
+    expect(reconcileLegend(['F'], [{ code: 'F', label: ' ', meaning: '  ' }])).toBeNull();
+    expect(reconcileLegend(['F', 'G'], [{ code: 'F', label: 'Fundamental', meaning: '' }])).toEqual([
+      { code: 'F', label: 'Fundamental', meaning: null },
+      { code: 'G', label: 'G', meaning: null },
+    ]);
+  });
+
+  it('стандарт нічого не пояснив — null, а не легенда «P — P»', () => {
+    expect(reconcileLegend(['P', 'R'], [])).toBeNull();
+    expect(
+      reconcileLegend(['P'], [{ code: 'P', label: 'P', meaning: null }]),
+    ).toBeNull();
+  });
+});
+
+describe('legendCovers', () => {
+  const legend: MarkerLegendItem[] = [
+    { code: 'P', label: 'Policy', meaning: null },
+    { code: 'R', label: 'Records', meaning: null },
+  ];
+
+  it('усі коди пояснено — так', () => {
+    expect(legendCovers(legend, ['R', 'p'])).toBe(true);
+  });
+
+  it('бракує коду, порожня легенда чи порожній реєстр — ні', () => {
+    expect(legendCovers(legend, ['P', 'O'])).toBe(false);
+    expect(legendCovers(null, ['P'])).toBe(false);
+    expect(legendCovers(legend, [])).toBe(false);
+  });
 });
 
 describe('extractClausesForSpec', () => {
   it('зберігає вимоги, ставить статус і рахує вартість', async () => {
     const provider = fakeProvider({
-      fallback: [item({ clauseNo: '1.1' })],
+      // Без позначок — без виклику легенди: тут рахуємо лише сторінки.
+      fallback: [item({ clauseNo: '1.1', markers: [] })],
       byPage: {},
     });
 
@@ -461,6 +701,121 @@ describe('extractClausesForSpec', () => {
     });
 
     expect(provider.calls).toBeLessThan(8);
+  });
+
+  // ─── Позначки й легенда ────────────────────────────────────────────────────
+
+  it('позначки зберігаються дослівно (нормалізовані), modules нова екстракція не пише', async () => {
+    const provider = fakeProvider({
+      byPage: {
+        13: [item({ clauseNo: '1.3', markers: [' P ', 'R', 'P', ''] })],
+        14: [item({ clauseNo: '1.4', markers: ['Major  Must'] })],
+      },
+      legend: TESCO_LEGEND_ANSWER,
+    });
+
+    await extractClausesForSpec(db, provider, specVersionId, { allPages: true, from: 13, to: 14 });
+
+    const stored = db.clauses.list(specVersionId);
+    expect(stored.map((c) => [c.clauseNo, c.markers])).toEqual([
+      ['1.3', ['P', 'R']],
+      ['1.4', ['Major Must']],
+    ]);
+    expect(stored.every((c) => c.modules.length === 0)).toBe(true);
+  });
+
+  it('без позначок — жодного виклику легенди і легенда null', async () => {
+    db.specs.setMarkerLegend(specVersionId, [{ code: 'P', label: 'Policy', meaning: 'old' }]);
+    const provider = fakeProvider({ fallback: [item({ clauseNo: '2.1', markers: [] })] });
+
+    const report = await extractClausesForSpec(db, provider, specVersionId, { allPages: true, from: 13, to: 14 });
+
+    expect(provider.legendRequests).toHaveLength(0);
+    expect(provider.calls).toBe(2);
+    expect(report.markerLegend).toBeNull();
+    expect(report.legendError).toBeNull();
+    // Стандарт (за новим реєстром) позначок не має — стара легенда теж зникає.
+    expect(db.specs.getVersion(specVersionId)?.markerLegend).toBeNull();
+  });
+
+  it('позначки є — один виклик легенди з кодами і вступом, легенда зберігається з реєстром', async () => {
+    db.specs.setMarkerLegend(specVersionId, null);
+    const provider = fakeProvider({
+      byPage: {
+        13: [item({ clauseNo: '1.3', markers: ['P', 'R'] })],
+        14: [item({ clauseNo: '1.4', markers: ['R'] })],
+      },
+      legend: TESCO_LEGEND_ANSWER,
+    });
+
+    const report = await extractClausesForSpec(db, provider, specVersionId, { allPages: true, from: 13, to: 14 });
+
+    expect(provider.legendRequests).toHaveLength(1);
+    const legendRequest = provider.legendRequests[0]!;
+    expect(legendRequest.stage).toBe('clause_extract');
+    const user = legendRequest.messages[0]?.content ?? '';
+    expect(user).toContain('<markers count="2">\n<marker>P</marker>\n<marker>R</marker>\n</markers>');
+    // Вступ — сторінки до першої сторінки з вимогами (13), тобто 1–12.
+    expect(user).toContain('<introduction pages="1-12">');
+    expect(user).toContain('--- page 12 ---');
+    expect(user).not.toContain('--- page 13 ---');
+
+    const expected = [
+      { code: 'P', label: 'Policy / procedure', meaning: 'The site must have a documented policy/procedure.' },
+      { code: 'R', label: 'Records', meaning: 'The site must have accurately completed records.' },
+    ];
+    expect(report.markerLegend).toEqual(expected);
+    expect(report.legendError).toBeNull();
+    expect(db.specs.getVersion(specVersionId)?.markerLegend).toEqual(expected);
+    // Виклик легенди — у вартості екстракції, як і сторінки.
+    expect(report.usage.costUsd).toBeCloseTo(0.025);
+  });
+
+  it('невдала легенда не зриває екстракцію: реєстр збережено, легенда null, причина — у звіті', async () => {
+    db.specs.setMarkerLegend(specVersionId, null);
+    const provider = fakeProvider({
+      fallback: [item({ clauseNo: '3.1', markers: ['Fundamental'] })],
+      legend: () => {
+        throw new LlmError('insufficient_credit', '402 Payment Required', { providerId: 'openrouter' });
+      },
+    });
+
+    const report = await extractClausesForSpec(db, provider, specVersionId, { allPages: true, from: 13, to: 13 });
+
+    expect(report.clausesStored).toBe(1);
+    expect(report.markerLegend).toBeNull();
+    expect(report.legendError).toEqual(expect.any(String));
+    expect(report.legendError?.length).toBeGreaterThan(0);
+    expect(db.clauses.list(specVersionId).map((c) => c.markers)).toEqual([['Fundamental']]);
+    expect(db.specs.getVersion(specVersionId)?.markerLegend).toBeNull();
+    expect(db.specs.getVersion(specVersionId)?.clausesStatus).toBe('extracted');
+  });
+
+  it('стандарт у тексті нічого не пояснив — відома легенда тих самих позначок лишається', async () => {
+    // Tesco: розшифровка P/R/O — діаграма, у витягнутому тексті її немає.
+    const known: MarkerLegendItem[] = [
+      { code: 'P', label: 'Policy / procedure', meaning: 'documented policy' },
+      { code: 'R', label: 'Records', meaning: 'records' },
+      { code: 'O', label: 'Observation', meaning: 'observation' },
+    ];
+    db.specs.setMarkerLegend(specVersionId, known);
+    const provider = fakeProvider({ fallback: [item({ clauseNo: '1.3', markers: ['P', 'R'] })], legend: [] });
+
+    const report = await extractClausesForSpec(db, provider, specVersionId, { allPages: true, from: 13, to: 13 });
+
+    expect(provider.legendRequests).toHaveLength(1);
+    expect(report.markerLegend).toEqual(known);
+    expect(db.specs.getVersion(specVersionId)?.markerLegend).toEqual(known);
+  });
+
+  it('відома легенда не покриває нових позначок — легенда null', async () => {
+    db.specs.setMarkerLegend(specVersionId, [{ code: 'P', label: 'Policy', meaning: 'x' }]);
+    const provider = fakeProvider({ fallback: [item({ clauseNo: '1.3', markers: ['P', 'Major Must'] })], legend: [] });
+
+    const report = await extractClausesForSpec(db, provider, specVersionId, { allPages: true, from: 13, to: 13 });
+
+    expect(report.markerLegend).toBeNull();
+    expect(db.specs.getVersion(specVersionId)?.markerLegend).toBeNull();
   });
 
   it('відмовляє, якщо версії специфікації немає', async () => {

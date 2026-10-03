@@ -18,9 +18,15 @@ import { useRunCoverage } from '@renderer/hooks/useRuns';
 import { useRunSpecBlobHash } from '@renderer/hooks/useSpecs';
 import { useT } from '@renderer/i18n';
 import { formatConfidence, truncate } from '@renderer/lib/format';
-import { VERDICT_GLYPH, useLabels } from '@renderer/lib/labels';
+import { VERDICT_GLYPH, isPotentialSeverity, useLabels } from '@renderer/lib/labels';
 
 const PAGE_SIZE = 100;
+
+/**
+ * Вердикти, за якими документ справді щось каже про вимогу. `not_addressed` і
+ * `not_applicable` — це «не про це» / «не стосується», а не зауваження.
+ */
+const SUBSTANTIVE_VERDICTS: readonly Verdict[] = VERDICTS.filter((v) => !isPotentialSeverity(v));
 
 /** Щільна таблиця findings із фільтрами. Фільтри живуть в URL — посилання можна переслати. */
 export function FindingsTab() {
@@ -91,7 +97,8 @@ export function FindingsTab() {
   };
 
   const docTitle = (id: number | null): string => {
-    if (id == null) return t.findings.allDocuments;
+    // null — зведений finding по всьому набору, а не «усі документи» з фільтра.
+    if (id == null) return t.findings.aggregateDoc;
     const doc = coverage.data?.documents.find((d) => d.documentVersionId === id);
     return doc ? `${doc.title} v${doc.versionLabel}` : `#${id}`;
   };
@@ -113,32 +120,47 @@ export function FindingsTab() {
     {
       key: 'doc',
       header: t.findings.colDocument,
+      hint: t.findings.colDocumentHint,
       width: '170px',
-      render: (f) => <span className="xsmall">{docTitle(f.documentVersionId)}</span>,
+      render: (f) => (
+        <span className={f.documentVersionId == null ? 'xsmall dim' : 'xsmall'}>
+          {docTitle(f.documentVersionId)}
+        </span>
+      ),
       title: (f) => docTitle(f.documentVersionId),
     },
     {
       key: 'verdict',
       header: t.findings.colVerdict,
-      width: '104px',
+      hint: t.findings.colVerdictHint,
+      width: '112px',
       render: (f) => <VerdictBadge verdict={f.verdict} short />,
     },
     {
       key: 'severity',
       header: t.findings.colSeverity,
-      width: '84px',
-      render: (f) => <SeverityBadge severity={f.severity} short />,
+      hint: t.findings.colSeverityHint,
+      width: '96px',
+      render: (f) => (
+        <SeverityBadge
+          severity={f.severity}
+          short
+          potential={isPotentialSeverity(f.review?.humanVerdict ?? f.verdict)}
+        />
+      ),
     },
     {
       key: 'conf',
       header: t.findings.colConfidence,
-      width: '62px',
+      hint: t.findings.colConfidenceHint,
+      width: '88px',
       align: 'right',
       render: (f) => <span className="tabnum xsmall">{formatConfidence(f.confidence)}</span>,
     },
     {
       key: 'pages',
       header: t.findings.colPages,
+      hint: t.findings.colPagesHint,
       width: '86px',
       render: (f) => (
         <ClausePages
@@ -161,7 +183,8 @@ export function FindingsTab() {
     {
       key: 'ev',
       header: t.findings.colEvidence,
-      width: '68px',
+      hint: t.findings.colEvidenceHint,
+      width: '84px',
       align: 'right',
       render: (f) => {
         const verified = f.evidence.filter((e) => e.verified).length;
@@ -175,16 +198,31 @@ export function FindingsTab() {
     {
       key: 'rationale',
       header: t.findings.colRationale,
-      render: (f) => <span className="dim">{truncate(f.rationale, 140)}</span>,
+      // Позначка «перевірити на аудиті» — у цій же колонці, а не окремою: вона
+      // потрібна рідко, а таблиця і так щільна. Підпис словами, текст — у підказці.
+      render: (f) => (
+        <>
+          {f.outsideEvidence && (
+            <span className="chip chip-outside" title={t.findings.outsideEvidenceTitle(f.outsideEvidence)}>
+              {t.findings.outsideEvidenceTag}
+            </span>
+          )}
+          <span className="dim">{truncate(f.rationale, 140)}</span>
+        </>
+      ),
       title: (f) => f.rationale,
     },
     {
       key: 'review',
       header: t.findings.colReview,
-      width: '78px',
+      hint: t.findings.colReviewHint,
+      width: '96px',
       render: (f) =>
         f.review ? (
-          <span className="badge badge-verified">
+          <span
+            className="badge badge-verified"
+            title={f.review.humanVerdict ? labels.verdict[f.review.humanVerdict] : t.review.agreedWithModel}
+          >
             {f.review.humanVerdict ? labels.verdictShort[f.review.humanVerdict] : t.findings.reviewAgreed}
           </span>
         ) : (
@@ -195,7 +233,7 @@ export function FindingsTab() {
 
   return (
     <div className="page-pad col" style={{ gap: 'var(--sp-2)', minHeight: 0 }}>
-      <div className="filters">
+      <div className="filters" data-tour="findings-filters">
         <input
           className="input"
           style={{ maxWidth: 240 }}
@@ -204,28 +242,45 @@ export function FindingsTab() {
           onChange={(e) => setSearchDraft(e.target.value)}
         />
 
-        {VERDICTS.map((v) => (
-          <button
-            key={v}
-            type="button"
-            className={`filter-chip ${verdicts.includes(v) ? 'on' : ''}`}
-            onClick={() => toggleIn('verdict', verdicts, v)}
-          >
-            <span aria-hidden="true">{VERDICT_GLYPH[v]}</span>
-            {labels.verdictShort[v]}
-          </button>
-        ))}
+        {/* Підпис групи + повна назва в title/aria: «◐ Част.», «MAJ» самі по собі — шифр. */}
+        <span className="filter-group" role="group" aria-label={t.findings.filterVerdict}>
+          <span className="filter-label" aria-hidden="true">
+            {t.findings.filterVerdict}
+          </span>
+          {VERDICTS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={`filter-chip ${verdicts.includes(v) ? 'on' : ''}`}
+              title={`${labels.verdict[v]} — ${labels.verdictHint[v]}`}
+              aria-label={labels.verdict[v]}
+              aria-pressed={verdicts.includes(v)}
+              onClick={() => toggleIn('verdict', verdicts, v)}
+            >
+              <span aria-hidden="true">{VERDICT_GLYPH[v]}</span>
+              {labels.verdictShort[v]}
+            </button>
+          ))}
+        </span>
 
-        {SEVERITIES.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className={`filter-chip ${severities.includes(s) ? 'on' : ''}`}
-            onClick={() => toggleIn('severity', severities, s)}
-          >
-            {labels.severityShort[s]}
-          </button>
-        ))}
+        <span className="filter-group" role="group" aria-label={t.findings.filterSeverity}>
+          <span className="filter-label" aria-hidden="true">
+            {t.findings.filterSeverity}
+          </span>
+          {SEVERITIES.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className={`filter-chip ${severities.includes(s) ? 'on' : ''}`}
+              title={labels.severity[s]}
+              aria-label={labels.severity[s]}
+              aria-pressed={severities.includes(s)}
+              onClick={() => toggleIn('severity', severities, s)}
+            >
+              {labels.severityShort[s]}
+            </button>
+          ))}
+        </span>
 
         <select className="select" style={{ maxWidth: 130 }} value={sectionNo} onChange={(e) => patch({ section: e.target.value })}>
           <option value="">{t.findings.allSections}</option>
@@ -273,6 +328,21 @@ export function FindingsTab() {
         )}
       </div>
 
+      {/* Головна пастка читання: сотні «Не розглянуто» виглядають як сотні порушень.
+          Пояснюємо й одним кліком лишаємо те, про що документи справді говорять. */}
+      {verdicts.length === 0 && (
+        <div className="read-hint">
+          <span className="grow">{t.findings.noiseHint}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => patch({ verdict: SUBSTANTIVE_VERDICTS.join(',') })}
+          >
+            {t.findings.noiseAction}
+          </button>
+        </div>
+      )}
+
       <QueryState
         isPending={findings.isPending}
         error={findings.error}
@@ -288,7 +358,8 @@ export function FindingsTab() {
               rows={data.items}
               rowKey={(f) => f.id}
               onRowClick={(f) => navigate(`/runs/${runId}/findings/${f.id}`)}
-              maxHeight="calc(100vh - 320px)"
+              // Підказка над таблицею забирає ~60px — без поправки пейджер з'їжджав за край вікна.
+              maxHeight={verdicts.length === 0 ? 'calc(100vh - 390px)' : 'calc(100vh - 320px)'}
               ariaLabel={t.findings.tableLabel}
             />
             <Pager

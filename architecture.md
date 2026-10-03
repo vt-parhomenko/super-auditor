@@ -29,7 +29,7 @@
 | ADR-1 | **Одиниця перевірки — clause, а не документ** | `Pest Management 0068` покриває 6 вимог зі 180. Порівняння «документ vs весь стандарт» дає ~170 хибних NC. |
 | ADR-2 | **Аудит = набір документів × spec_version** | Головна цінність — gap-аналіз: які вимоги не покриті *жодним* документом. Аудити валяться на відсутніх доказах. |
 | ADR-3 | **Без RAG/ембедингів на старті** | Спека = 42k токенів, документ = 2–4k. Все влазить у контекст 1M. Векторна база — передчасна оптимізація. |
-| ADR-4 | **Applicability — детермінований фільтр, не рішення AI** | Колонки P/R/O + сертифікати виробництва (ISO 14001 → пропустити секцію) дають N/A за правилом. Ріже набір і прибирає хибні NC. |
+| ADR-4 | **Applicability — детермінований фільтр, не рішення AI** | Колонки P/R/O + сертифікати виробництва (ISO 14001 → пропустити секцію) дають N/A за правилом. Ріже набір і прибирає хибні NC. *Перегляд:* P/R/O у Tesco — тип доказу (політика / записи / огляд), а не модулі; профілі виробництва приховані до переосмислення, а P/R/O тепер — «позначки стандарту» (Stage 1). |
 | ADR-5 | **Кожен вердикт має верифіковану цитату** | Citations API + пост-перевірка. Без доказу вердикт → `needs_human_review`. |
 | ADR-6 | **AI-вердикт і human-вердикт зберігаються окремо** | Людські правки = eval-набір для регресійного тестування промптів і моделей. |
 | ADR-7 | **Кеш за `hash(контент) + prompt_version + model_id`** | Дешеві переприганяння + можливість відповісти «чому результат змінився». |
@@ -160,6 +160,8 @@ CREATE TABLE spec_version (
   effective_from TEXT,
   clauses_status TEXT NOT NULL DEFAULT 'pending'
                  CHECK (clauses_status IN ('pending','extracted','reviewed')),
+  marker_legend  TEXT,                     -- міграція 4: JSON [{code,label,meaning}] — легенда позначок
+                                           -- словами самого стандарту; NULL — позначок немає / не пояснено
   UNIQUE (specification_id, version_label)
 );
 
@@ -172,7 +174,9 @@ CREATE TABLE clause (
   section_title   TEXT,                    -- 'Pest management'
   topic           TEXT,                    -- 'Pest management programme specification'
   requirement_text TEXT NOT NULL,
-  modules         TEXT NOT NULL DEFAULT '[]',  -- JSON: ["P","R"]  (Product/Responsible/Operational)
+  modules         TEXT NOT NULL DEFAULT '[]',  -- застаріле: P/R/O для прихованих профілів виробництва
+  markers         TEXT NOT NULL DEFAULT '[]',  -- міграція 4: JSON ["P","R"] / ["Major Must"] — позначки
+                                               -- стандарту дослівно; до text_hash не входять
   obligation      TEXT CHECK (obligation IN ('must','should','may')),
   page_from       INTEGER,
   page_to         INTEGER,
@@ -279,6 +283,7 @@ CREATE TABLE finding (
   rationale           TEXT NOT NULL,
   gap                 TEXT,                -- чого саме бракує
   recommendation      TEXT,
+  outside_evidence    TEXT,                -- міграція 5: що перевірити поза документом (записи, огляд); judge.v2
   created_at          TEXT NOT NULL,
   UNIQUE (run_id, clause_id, document_version_id)
 );
@@ -363,9 +368,20 @@ Stage 6  Aggregate: матриця покриття, gap-аналіз, оцін�
 
 ### Stage 1 — Реєстр вимог (найкритичніший етап)
 
-Стандарт Tesco — таблиця з колонками `P R O | Clause number | Topic | Requirements`.
+Формат стандарту не зашитий. Tesco — таблиця з колонками `P R O | Clause number | Topic |
+Requirements`, ISO — нумерована проза, GlobalG.A.P. — номери `AF 1.2.3` з рівнем «Major Must».
 Плоска екстракція зливає колонки: рядок `P R  1.3 Management review  Site management must...`
-треба розібрати на 4 поля. Робимо посторінковим LLM-екстрактом у strict-схему.
+треба розібрати на поля. Робимо посторінковим LLM-екстрактом у strict-схему (`clause_extract.v2`).
+
+**Позначки стандарту.** Будь-які короткі коди, які стандарт друкує біля вимоги (прапорці
+P / R / O у Tesco, «Major Must», «Fundamental»), зберігаються дослівно в `clause.markers`.
+Що вони означають, вирішує не модель із загальних знань, а легенда самого стандарту: після
+всіх сторінок, якщо позначки знайдено, — один виклик `marker_legend.v1` (той самий етап і
+модель) з кодами й текстом вступних сторінок. Результат — `spec_version.marker_legend`,
+у тій самій транзакції, що й реєстр; `meaning: null`, де стандарт пояснення не дає. Невдача
+цього виклику реєстр не зриває (попередження в UI). Легенду Tesco (стор. 10) намальовано
+діаграмою, у тексті її немає — тому для наявних реєстрів її записала міграція 4, а повторна
+екстракція не стирає відому легенду, що пояснює ті самі коди.
 
 ```
 для кожної сторінки p у діапазоні clause-таблиць:
@@ -374,9 +390,10 @@ Stage 6  Aggregate: матриця покриття, gap-аналіз, оцін�
 ```
 
 Валідація після екстракції (без AI):
-- нумерація монотонна, немає дірок у межах секції → інакше `review_status='flagged'`;
+- нумерація без дірок у межах одного рівня (`10.1 → 10.4`, `A.5.1 → A.5.3`, `AF 1.1.1 → AF 1.1.4`)
+  → інакше `review_status='flagged'`; номер-заголовок над підпунктами (`7.1.5` → `7.1.5.1`) дірою не є;
+- номер схожий на номер вимоги (`10.3`, `4.2.1`, `A.5.1`, `AF 1.2.3`);
 - `requirement_text` не порожній і довший за `topic`;
-- `modules ⊆ {P,R,O}`;
 - дублікати `clause_no` → flagged.
 
 **Обов'язковий UI ручної вичитки реєстру.** Це не опція. Якщо реєстр кривий — усе далі
@@ -550,13 +567,15 @@ export interface LlmProvider {
 ### Маршрутизація по етапах
 
 ```ts
+// src/shared/domain.ts — спільне для main і renderer
 export const DEFAULT_ROUTING: Record<Stage, ModelRef> = {
-  clause_extract: { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-  spec_summary:   { provider: 'anthropic', model: 'claude-sonnet-5', effort: 'medium' },
-  doc_profile:    { provider: 'anthropic', model: 'claude-haiku-4-5' },
-  judge:          { provider: 'anthropic', model: 'claude-opus-5',   effort: 'high' },
-  critic:         { provider: 'anthropic', model: 'claude-opus-5',   effort: 'high' },
+  clause_extract: { provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', effort: 'medium' },
+  spec_summary:   { provider: 'openrouter', model: 'anthropic/claude-sonnet-5.5', effort: 'medium' },
+  doc_profile:    { provider: 'openrouter', model: 'anthropic/claude-haiku-4.5' },
+  judge:          { provider: 'openrouter', model: 'anthropic/claude-opus-5.5',  effort: 'high' },
+  critic:         { provider: 'openrouter', model: 'anthropic/claude-opus-5.5',  effort: 'high' },
 };
+// Провайдер без моделі → STAGE_MODEL_DEFAULTS[provider][stage] (той самий клас моделі).
 ```
 
 Ціни (Anthropic first-party, вхід/вихід за 1M токенів), для лічильника вартості:
@@ -600,7 +619,45 @@ export const DEFAULT_ROUTING: Record<Stage, ModelRef> = {
 (`prompt_version`) записується в кожен `finding` і `llm_call`. Зміна промпта = нова
 версія = інвалідований кеш. Промпти англійською — документи і стандарти англомовні.
 
-### `judge.v1`
+### `judge.v2` *(поточна)* — позначки стандарту
+
+v1 не бачив позначок біля вимог (Tesco: P — процедура, R — записи, O — огляд), тож процедура
+на вимогу «P R» отримувала `partial` лише тому, що документ — не запис. Найчастіше хибне
+зауваження. v2 = v1 плюс:
+
+- **кешований префікс:** `grading_rules` → `<marker_legend>` (лише якщо у версії є легенда;
+  `<marker code label>значення словами стандарту</marker>`, непояснена позначка — явно
+  «не пояснено») → `document`. Легенда — властивість версії, однакова для всіх батчів;
+- **вимога:** `<clause … markers="P, R">`; без позначок — без атрибута. Стандарт без
+  позначок дає той самий префікс і user, що v1 (різниця — лише system і інструмент);
+- **system** — загальний розділ (без назв стандартів і зашитих кодів): документ доводить
+  лише те, що документ може містити; коли легенда каже «записи / огляд / доказ виконання»,
+  не знижувати за це, а описати в `outside_evidence`, що перевірити поза документом; брак
+  того, що документ мусить містити, — як і раніше `gap`; код без легенди — лише інформація;
+  легенда про критичність вимоги — враховувати разом із grading rules для severity;
+- **інструмент:** `report_finding` + необов'язкове `outside_evidence: string` (strict-сумісне;
+  у строгому режимі OpenRouter — nullable, `null` прибирається до zod). Мова результатів
+  поширюється й на нього;
+- **`cacheInput`:** позначки кожної вимоги і вся легенда — правка легенди чи позначок
+  інвалідовує кеш.
+
+Результат — `finding.outside_evidence` (міграція 5), у UI «Перевірити поза документом», в
+експорті Markdown — рядок у невідповідностях і розділ для решти. Матриця покриття і gaps
+поле не враховують: `compliant` з `outside_evidence` лишається `compliant`. `audit_run.prompt_version`
+тепер береться з `PROMPT_VERSIONS.judge`, а не літералом.
+
+### `critic.v2` *(поточна)*
+
+Перевірка №2 v1 («намір/політика там, де вимога хоче процедуру, запис чи доказ виконання»)
+повертала людині кожен `compliant` на R/O-вимогах — тобто відкочувала рівно те, що `judge.v2`
+перестав вважати прогалиною. v2 отримує позначки вимоги, **лише її** пункти легенди
+(`legendEntriesFor`) і `<claimed_outside_evidence>` судді. Текст перевірки №2 v1 лишився, з
+винятком: коли легенда каже «записи / огляд», документ винен лише задокументовану частину
+(процедуру й вказівку вести записи); записів чи практики на місці в документі — не привід
+для незгоди і не «missing element». Без позначок user байт-у-байт як у v1. Схема відповіді —
+та сама; при незгоді `outsideEvidence` finding'а зберігається.
+
+### `judge.v1` *(історія)*
 
 **System (кешується):**
 ```
@@ -682,7 +739,7 @@ For each clause call `report_finding` exactly once.
 }
 ```
 
-### `critic.v1`
+### `critic.v1` *(історія)*
 
 ```
 You are reviewing another auditor's finding. The finding claims COMPLIANT.
@@ -700,7 +757,7 @@ Check specifically:
 Return `agree` only if you can defend COMPLIANT against all three.
 ```
 
-### `clause_extract.v1`
+### `clause_extract.v1` *(історія; поточна — `clause_extract.v2`, формат-незалежна, з `markers`)*
 
 ```
 Extract clause definitions from one page of a customer standard.

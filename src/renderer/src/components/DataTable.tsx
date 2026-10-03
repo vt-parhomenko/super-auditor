@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode, Ref } from 'react';
 
+import { InfoTip } from '@renderer/components/InfoTip';
 import { useT } from '@renderer/i18n';
 
 /**
@@ -20,6 +21,13 @@ export interface Column<T> {
   render: (row: T, index: number) => ReactNode;
   /** Текст для title — щоб обрізане значення можна було прочитати. */
   title?: (row: T) => string | undefined;
+  /**
+   * «Як читати цю колонку» — значок «ⓘ» біля заголовка. Для колонок, де значення
+   * без пояснення загадкове: скорочення, частки «3/5», коди, «—».
+   */
+  hint?: ReactNode;
+  /** Додатковий клас комірок колонки (напр. `dt-actions` для кнопок-іконок). */
+  cellClassName?: string;
 }
 
 export interface DataTableProps<T> {
@@ -60,7 +68,21 @@ export function DataTable<T>({
           <tr>
             {columns.map((c) => (
               <th key={c.key} className={c.align === 'right' ? 'num' : undefined} scope="col">
-                {c.header}
+                {c.hint != null ? (
+                  // Довгий підпис (нідерландська, українська) обрізається трикрапкою,
+                  // але «ⓘ» лишається видимим — інакше саме пояснення зникало за краєм колонки.
+                  <span className={`th-inner ${c.align === 'right' ? 'th-inner-end' : ''}`}>
+                    <span
+                      className="th-text"
+                      title={typeof c.header === 'string' ? c.header : undefined}
+                    >
+                      {c.header}
+                    </span>
+                    <InfoTip about={typeof c.header === 'string' ? c.header : undefined}>{c.hint}</InfoTip>
+                  </span>
+                ) : (
+                  c.header
+                )}
               </th>
             ))}
           </tr>
@@ -90,6 +112,7 @@ export function DataTable<T>({
                       c.align === 'right' ? 'num' : '',
                       c.align === 'center' ? 'center' : '',
                       c.wrap ? 'wrap-cell' : '',
+                      c.cellClassName ?? '',
                     ]
                       .filter(Boolean)
                       .join(' ');

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { applyPragmas } from './connection';
 import { LATEST_VERSION, MIGRATIONS, migrate, userVersion, type Migration } from './migrations';
-import { createTestDb, type Db } from './index';
+import { createTestDb, wrapDb, type Db } from './index';
 
 const EXPECTED_TABLES = [
   'app_setting',
@@ -80,6 +80,8 @@ describe('migrations', () => {
       '1:initial-schema',
       '2:llm-spend-ledger',
       '3:run-launch-settings',
+      '4:standard-markers',
+      '5:finding-outside-evidence',
     ]);
     raw.close();
   });
@@ -195,6 +197,131 @@ describe('міграція 3: налаштування старту прогон
       .get();
     expect(row).toEqual({ routing: null, results_language: null });
     raw.close();
+  });
+});
+
+describe('міграція 4: позначки стандарту', () => {
+  /** База на версії 3 з двома специфікаціями: Tesco (P/R/O) і без позначок. */
+  function v3WithClauses(): Database.Database {
+    const raw = new Database(':memory:');
+    applyPragmas(raw, 1000);
+    migrate(raw, MIGRATIONS.slice(0, 3));
+    raw.exec(`
+      INSERT INTO blob (hash, rel_path, byte_size, mime, created_at)
+        VALUES ('${'a'.repeat(64)}', 'x', 1, 'application/pdf', '2026-01-01');
+      INSERT INTO specification (name) VALUES ('Tesco'), ('ISO 9001');
+      INSERT INTO spec_version (specification_id, version_label, blob_hash)
+        VALUES (1, '5.0', '${'a'.repeat(64)}'), (2, '2015', '${'a'.repeat(64)}');
+      INSERT INTO clause (spec_version_id, clause_no, sort_key, requirement_text, modules, text_hash)
+        VALUES (1, '1.3', '001.003', 'Site management must review.', '["P","R"]', 'h1'),
+               (1, '1.4', '001.004', 'The site must have resources.', '[]', 'h2'),
+               (1, '1.5', '001.005', 'The site must plan.', 'not json', 'h3'),
+               (2, '4.1', '004.001', 'The organization shall determine.', '[]', 'h4');
+    `);
+    return raw;
+  }
+
+  it('додає clause.markers і spec_version.marker_legend', () => {
+    const db = fresh();
+    const clauseColumns = db.raw
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('clause')")
+      .all()
+      .map((c) => c.name);
+    const versionColumns = db.raw
+      .prepare<[], { name: string }>("SELECT name FROM pragma_table_info('spec_version')")
+      .all()
+      .map((c) => c.name);
+    expect(clauseColumns).toContain('markers');
+    expect(versionColumns).toContain('marker_legend');
+  });
+
+  it('переносить P/R/O у markers і дає версіям Tesco легенду стандарту', () => {
+    const raw = v3WithClauses();
+    migrate(raw);
+
+    const markers = raw
+      .prepare<[], { clause_no: string; markers: string }>('SELECT clause_no, markers FROM clause ORDER BY id')
+      .all();
+    expect(markers).toEqual([
+      { clause_no: '1.3', markers: '["P","R"]' },
+      { clause_no: '1.4', markers: '[]' },
+      // Сміття в modules не переноситься — лишається типове '[]'.
+      { clause_no: '1.5', markers: '[]' },
+      { clause_no: '4.1', markers: '[]' },
+    ]);
+
+    const legends = raw
+      .prepare<[], { id: number; marker_legend: string | null }>('SELECT id, marker_legend FROM spec_version ORDER BY id')
+      .all();
+    expect(legends[1]?.marker_legend).toBeNull();
+    expect(JSON.parse(legends[0]?.marker_legend ?? 'null')).toEqual([
+      {
+        code: 'P',
+        label: 'Policy / procedure',
+        meaning: 'The site must have a documented policy/procedure that has been fully implemented',
+      },
+      {
+        code: 'R',
+        label: 'Records',
+        meaning: 'The site must have comprehensive accurately completed records to demonstrate compliance',
+      },
+      {
+        code: 'O',
+        label: 'Observation',
+        meaning: 'Compliance to the clause will be verified through observation of the site',
+      },
+    ]);
+    raw.close();
+  });
+
+  it('після міграції репозиторій віддає markers і markerLegend', () => {
+    const raw = v3WithClauses();
+    migrate(raw);
+    const db = wrapDb(raw);
+
+    expect(db.clauses.getByNo(1, '1.3')?.markers).toEqual(['P', 'R']);
+    expect(db.specs.getVersion(1)?.markerLegend?.map((item) => item.code)).toEqual(['P', 'R', 'O']);
+    expect(db.specs.getVersion(2)?.markerLegend).toBeNull();
+    db.close();
+  });
+});
+
+describe('міграція 5: що перевірити поза документом', () => {
+  it('додає finding.outside_evidence', () => {
+    const db = fresh();
+    const columns = db.raw
+      .prepare<[], { name: string; notnull: number }>("SELECT name, \"notnull\" FROM pragma_table_info('finding')")
+      .all();
+    const column = columns.find((c) => c.name === 'outside_evidence');
+    expect(column).toBeDefined();
+    // NULL дозволено: findings від judge.v1 і стандарти без позначок нічого «поза документом» не мають.
+    expect(column?.notnull).toBe(0);
+  });
+
+  it('findings, створені до міграції, отримують NULL і читаються репозиторієм', () => {
+    const raw = new Database(':memory:');
+    applyPragmas(raw, 1000);
+    migrate(raw, MIGRATIONS.slice(0, 4));
+    raw.exec(`
+      INSERT INTO blob (hash, rel_path, byte_size, mime, created_at)
+        VALUES ('${'a'.repeat(64)}', 'x', 1, 'application/pdf', '2026-01-01');
+      INSERT INTO specification (name) VALUES ('Tesco');
+      INSERT INTO spec_version (specification_id, version_label, blob_hash)
+        VALUES (1, '5.0', '${'a'.repeat(64)}');
+      INSERT INTO clause (spec_version_id, clause_no, sort_key, requirement_text, text_hash)
+        VALUES (1, '10.3', '010.003', 'The site must have a pest programme.', 'h1');
+      INSERT INTO audit_run (spec_version_id, model_judge, prompt_version)
+        VALUES (1, 'claude-opus-5', 'judge.v1');
+      INSERT INTO finding (run_id, clause_id, verdict, rationale, created_at)
+        VALUES (1, 1, 'partial', 'Old finding.', '2026-01-01');
+    `);
+
+    migrate(raw);
+    const db = wrapDb(raw);
+    const finding = db.findings.listByRun(1)[0];
+    expect(finding?.rationale).toBe('Old finding.');
+    expect(finding?.outsideEvidence).toBeNull();
+    db.close();
   });
 });
 

@@ -27,6 +27,7 @@ import type {
   ResultsLanguage,
   RunConfig,
   RunProgress,
+  RunStatus,
   RunSummary,
   SiteProfileDto,
   SpecSummaryDto,
@@ -48,9 +49,18 @@ export interface IpcApi {
     documentId: number,
     patch: { title?: string; docNumber?: string | null; processOwner?: string | null; kind?: DocumentKind | null },
   ) => Promise<void>;
-  'documents:delete': (documentId: number) => Promise<void>;
   /** Усі прогони, що торкались цього документа, від найновішого. */
   'documents:runs': (documentId: number) => Promise<DocumentRunStats[]>;
+
+  // — Видалення специфікацій і документів (разом із перевірками, що на них базуються)
+  /** Що саме зникне. Чисте читання, без жодних змін — для вікна підтвердження. */
+  'library:deleteImpact': (target: LibraryDeleteTarget) => Promise<LibraryDeleteImpact>;
+  /**
+   * Видаляє ціль разом із перевірками, що на неї спираються, і файлами, яких
+   * більше ніхто не використовує. Журнал витрат НЕ чіпається. Повертає те,
+   * що фактично видалено.
+   */
+  'library:delete': (target: LibraryDeleteTarget) => Promise<LibraryDeleteImpact>;
 
   // — Специфікації
   'specs:list': () => Promise<SpecificationDto[]>;
@@ -251,6 +261,66 @@ export interface ProviderBalance {
   fetchedAt: IsoDate;
 }
 
+// ─── Видалення зі сховища ────────────────────────────────────────────────────
+
+export const LIBRARY_DELETE_KINDS = ['specification', 'specVersion', 'document', 'documentVersion'] as const;
+export type LibraryDeleteKind = (typeof LIBRARY_DELETE_KINDS)[number];
+
+export function isLibraryDeleteKind(value: unknown): value is LibraryDeleteKind {
+  return typeof value === 'string' && (LIBRARY_DELETE_KINDS as readonly string[]).includes(value);
+}
+
+/** Що видаляємо: ціле (усі версії) або одну версію. */
+export interface LibraryDeleteTarget {
+  kind: LibraryDeleteKind;
+  id: number;
+}
+
+/** Перевірка документів, яка зникне разом із ціллю. */
+export interface LibraryDeleteRun {
+  id: number;
+  label: string | null;
+  status: RunStatus;
+  /** Скільки версій документів охоплює перевірка. */
+  documentCount: number;
+  /**
+   * Документи перевірки, які самі НЕ видаляються. Для документа > 0 означає,
+   * що разом із ним зникнуть і результати по інших документах — перевірка
+   * неподільна. Для специфікації це просто всі документи перевірки.
+   */
+  otherDocuments: number;
+}
+
+/**
+ * Ціна видалення — те, що показує вікно підтвердження, і те, що `library:delete`
+ * повертає як фактично видалене (рахується тим самим кодом).
+ */
+export interface LibraryDeleteImpact {
+  target: LibraryDeleteTarget;
+  /** Людська назва: «Tesco Ornamental Plant Standard v5.0», «0068 Pest Management v002». */
+  title: string;
+  /** id специфікації або документа, до якого належить ціль. */
+  parentId: number;
+  /** Зникає й сама специфікація/документ: видаляють ціле або його останню версію. */
+  deletesParent: boolean;
+  /** id версій, що видаляються, — щоб UI пішов зі сторінки видаленої сутності. */
+  versionIds: number[];
+  versions: number;
+  /** Вимоги реєстру (лише для специфікацій). */
+  clauses: number;
+  /** Профілі документа (лише для документів). */
+  documentProfiles: number;
+  runs: LibraryDeleteRun[];
+  findings: number;
+  /** Людські вердикти, які буде втрачено, — найцінніше з усього. */
+  reviewedFindings: number;
+  /** Файли, які більше ніхто не використовує, — їх буде прибрано з диска. */
+  filesToRemove: number;
+  bytesToFree: number;
+  /** Файли, які лишаються: той самий файл імпортовано ще як інший документ/версію. */
+  sharedFilesKept: number;
+}
+
 export interface RunEstimateDto {
   tasks: number;
   inputTokens: number;
@@ -305,7 +375,6 @@ export const IPC_CHANNELS: readonly IpcChannel[] = [
   'documents:list',
   'documents:get',
   'documents:update',
-  'documents:delete',
   'specs:list',
   'specs:get',
   'specs:setCloudAllowed',
@@ -324,6 +393,8 @@ export const IPC_CHANNELS: readonly IpcChannel[] = [
   'blob:path',
   'blob:read',
   'documents:runs',
+  'library:deleteImpact',
+  'library:delete',
   'usage:spend',
   'usage:recent',
   'sites:list',

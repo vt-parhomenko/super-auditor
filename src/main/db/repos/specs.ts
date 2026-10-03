@@ -6,7 +6,13 @@
  * Лічильники рахуються підзапитами в тому ж SELECT, щоб не робити N+1.
  */
 
-import type { ClausesStatus, SpecSummaryDto, SpecVersionDto, SpecificationDto } from '@shared/domain';
+import type {
+  ClausesStatus,
+  MarkerLegendItem,
+  SpecSummaryDto,
+  SpecVersionDto,
+  SpecificationDto,
+} from '@shared/domain';
 import {
   nowIso,
   toJson,
@@ -21,7 +27,7 @@ import { BaseRepo, toId, type SqliteDb } from '../types';
 
 const VERSION_SELECT = `
   SELECT sv.id, sv.specification_id, sv.version_label, sv.blob_hash, sv.extraction_id,
-         sv.effective_from, sv.clauses_status,
+         sv.effective_from, sv.clauses_status, sv.marker_legend,
          (SELECT COUNT(*) FROM clause c WHERE c.spec_version_id = sv.id) AS clause_count,
          (SELECT COUNT(*) FROM clause c WHERE c.spec_version_id = sv.id
             AND c.review_status IN ('confirmed','edited')) AS reviewed_clause_count
@@ -175,6 +181,18 @@ export class SpecsRepo extends BaseRepo {
 
   setClausesStatus(specVersionId: number, status: ClausesStatus): void {
     this.stmt('UPDATE spec_version SET clauses_status = ? WHERE id = ?').run(status, specVersionId);
+  }
+
+  /**
+   * Легенда позначок стандарту (Stage 1). null або порожній список — легенди
+   * немає: UI тоді не малює рядок легенди взагалі.
+   */
+  setMarkerLegend(specVersionId: number, legend: readonly MarkerLegendItem[] | null): void {
+    const value =
+      legend && legend.length > 0
+        ? toJson(legend.map((item) => ({ code: item.code, label: item.label, meaning: item.meaning })))
+        : null;
+    this.stmt('UPDATE spec_version SET marker_legend = ? WHERE id = ?').run(value, specVersionId);
   }
 
   setVersionExtraction(specVersionId: number, extractionId: number | null): void {

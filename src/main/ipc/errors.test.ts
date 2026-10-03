@@ -69,7 +69,7 @@ describe('мова повідомлень', () => {
       message: 'No documents selected for the run',
       details: { field: 'documentVersionIds' },
     });
-    expect(err.shapeIn('uk').message).toBe('Не вибрано жодного документа для прогону');
+    expect(err.shapeIn('uk').message).toBe('Не вибрано жодного документа для перевірки');
     expect(err.shapeIn('nl').message).toBe('Er zijn geen documenten geselecteerd voor de auditrun');
   });
 
@@ -86,7 +86,7 @@ describe('мова повідомлень', () => {
 
   it('serializeIpcError віддає текст мовою інтерфейсу', () => {
     const outbound = serializeIpcError(notFound('run', 5), 'runs:get', { error: () => {} }, 'uk');
-    expect(outbound.message).toBe('[NOT_FOUND] Прогін 5 не знайдено');
+    expect(outbound.message).toBe('[NOT_FOUND] Перевірку 5 не знайдено');
   });
 });
 

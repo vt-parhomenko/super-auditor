@@ -1,13 +1,18 @@
-/** Бібліотека документів. Чисте читання/запис через репозиторії. */
+/**
+ * Бібліотека документів. Чисте читання/запис через репозиторії.
+ *
+ * Видалення документа живе в `library:delete` (handlers/library.ts): воно зачіпає
+ * перевірки й файли, тож має одне місце для документів і специфікацій.
+ */
 
 import type { IpcHandlers } from '@shared/ipc';
 import type { IpcContext } from '../context';
-import { notFound, validation } from '../errors';
+import { notFound } from '../errors';
 import { requireId } from './guards';
 
 export type DocumentHandlers = Pick<
   IpcHandlers,
-  'documents:list' | 'documents:get' | 'documents:update' | 'documents:delete' | 'documents:runs'
+  'documents:list' | 'documents:get' | 'documents:update' | 'documents:runs'
 >;
 
 export function documentHandlers(ctx: IpcContext): DocumentHandlers {
@@ -34,28 +39,6 @@ export function documentHandlers(ctx: IpcContext): DocumentHandlers {
     'documents:update': (documentId, patch) => {
       const updated = db.documents.update(requireId(documentId, 'documentId'), patch);
       if (!updated) throw notFound('document', documentId);
-      events.emit('library:changed', { kind: 'documents' });
-    },
-
-    'documents:delete': (documentId) => {
-      const document = db.documents.get(requireId(documentId, 'documentId'));
-      if (!document) throw notFound('document', documentId);
-
-      // Версію, яку вже судили, БД не віддасть видалити (FOREIGN KEY на
-      // audit_run_document). Кажемо це людською мовою, а не «constraint failed».
-      const versionIds = new Set(document.versions.map((version) => version.id));
-      const blocking = db.runs
-        .list()
-        .filter((run) => run.documentVersionIds.some((id) => versionIds.has(id)));
-      if (blocking.length > 0) {
-        throw validation((m) => m.documents.usedInRuns(blocking.length), {
-          runIds: blocking.map((run) => run.id),
-        });
-      }
-
-      // Блоби лишаються на диску: їх може ділити інший документ (content-addressed
-      // сховище дедуплікує), прибирає їх окремий збирач сміття по listOrphans().
-      db.documents.delete(document.id);
       events.emit('library:changed', { kind: 'documents' });
     },
   };

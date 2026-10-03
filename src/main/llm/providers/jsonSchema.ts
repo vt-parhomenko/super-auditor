@@ -89,22 +89,23 @@ function makeNullable(node: unknown): unknown {
     return hasNull ? node : { ...node, anyOf: [...node.anyOf, { type: 'null' }] };
   }
 
-  if (typeof node.type === 'string' && node.type !== 'object' && node.$ref === undefined && node.const === undefined) {
+  // Перелічення — лише обгорткою `anyOf: [{enum}, {type: null}]`, як це робить
+  // сам zod для `.nullable()`. Варіант `type: [..., 'null']` + `null` усередині
+  // `enum` Anthropic через OpenRouter відхиляв з 400 «Provider returned error» —
+  // на цьому падало кожне завдання судження (поле `severity`).
+  const hasEnum = Array.isArray(node.enum);
+
+  if (!hasEnum && typeof node.type === 'string' && node.type !== 'object' && node.$ref === undefined && node.const === undefined) {
     if (node.type === 'null') return node;
-    const next: JsonSchema = { ...node, type: [node.type, 'null'] };
-    // enum без null відкинув би null навіть при type: [..., 'null'].
-    if (Array.isArray(node.enum) && !node.enum.includes(null)) next.enum = [...node.enum, null];
-    return next;
+    return { ...node, type: [node.type, 'null'] };
   }
 
-  if (Array.isArray(node.type) && node.$ref === undefined && node.const === undefined && !isObjectType(node)) {
+  if (!hasEnum && Array.isArray(node.type) && node.$ref === undefined && node.const === undefined && !isObjectType(node)) {
     if (node.type.includes('null')) return node;
-    const next: JsonSchema = { ...node, type: [...node.type, 'null'] };
-    if (Array.isArray(node.enum) && !node.enum.includes(null)) next.enum = [...node.enum, null];
-    return next;
+    return { ...node, type: [...node.type, 'null'] };
   }
 
-  // Об'єкти, $ref і const — обгорткою: так строгі режими розуміють найнадійніше.
+  // Перелічення, об'єкти, $ref і const — обгорткою: так строгі режими розуміють найнадійніше.
   const { description, ...rest } = node;
   const wrapped: JsonSchema = { anyOf: [rest, { type: 'null' }] };
   if (description !== undefined) wrapped.description = description;

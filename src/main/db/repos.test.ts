@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb, parseRunRouting, type Db } from './index';
-import { hash, requireId, seed, type SeedResult } from './fixtures';
+import { TESCO_MARKER_LEGEND, hash, requireId, seed, type SeedResult } from './fixtures';
 
 let s: SeedResult;
 let db: Db;
@@ -244,6 +244,40 @@ describe('specs', () => {
     });
   });
 
+  it('легенда позначок: круговий рейс, null і порожній список — «легенди немає»', () => {
+    expect(db.specs.getVersion(s.specVersionId)?.markerLegend).toEqual(TESCO_MARKER_LEGEND);
+    // У списку специфікацій — те саме, що й у getVersion.
+    expect(db.specs.list()[0]?.versions[0]?.markerLegend).toEqual(TESCO_MARKER_LEGEND);
+
+    const gap = [{ code: 'Major Must', label: 'Major Must', meaning: null }];
+    db.specs.setMarkerLegend(s.specVersionId, gap);
+    expect(db.specs.getVersion(s.specVersionId)?.markerLegend).toEqual(gap);
+
+    db.specs.setMarkerLegend(s.specVersionId, []);
+    expect(db.specs.getVersion(s.specVersionId)?.markerLegend).toBeNull();
+    db.specs.setMarkerLegend(s.specVersionId, null);
+    expect(db.specs.getVersion(s.specVersionId)?.markerLegend).toBeNull();
+  });
+
+  it('нова версія — без легенди; биті пункти легенди відкидаються поштучно', () => {
+    const version = db.specs.addVersion({
+      specificationId: s.specificationId,
+      versionLabel: '6.0',
+      blobHash: s.specBlob,
+    });
+    expect(version.markerLegend).toBeNull();
+
+    db.raw
+      .prepare('UPDATE spec_version SET marker_legend = ? WHERE id = ?')
+      .run('[{"code":"P","label":"","meaning":"x"},{"label":"no code"},42,{"code":" R ","meaning":" "}]', version.id);
+    expect(db.specs.getVersion(version.id)?.markerLegend).toEqual([
+      { code: 'P', label: 'P', meaning: 'x' },
+      { code: 'R', label: 'R', meaning: null },
+    ]);
+    db.raw.prepare('UPDATE spec_version SET marker_legend = ? WHERE id = ?').run('not json', version.id);
+    expect(db.specs.getVersion(version.id)?.markerLegend).toBeNull();
+  });
+
   it('cloudAllowed зберігається як boolean (ADR-8)', () => {
     db.specs.setCloudAllowed(s.specificationId, true);
     expect(db.specs.get(s.specificationId)?.cloudAllowed).toBe(true);
@@ -320,6 +354,51 @@ describe('clauses', () => {
       reviewStatus: 'confirmed',
     });
     expect(clause?.textHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('позначки стандарту: круговий рейс, нормалізація і patch', () => {
+    const id = requireId(s.clauseIds, '10.3');
+    expect(db.clauses.get(id)?.markers).toEqual(['P', 'R']);
+
+    const created = db.clauses.create(s.specVersionId, {
+      clauseNo: 'AF 1.2.3',
+      requirementText: 'Is there a reference system for each field?',
+      markers: [' Major Must ', 'Major Must', ''],
+    });
+    expect(created.markers).toEqual(['Major Must']);
+    expect(created.modules).toEqual([]);
+
+    const patched = db.clauses.patch(id, { markers: ['O'] });
+    expect(patched?.markers).toEqual(['O']);
+    expect(patched?.modules).toEqual(['P', 'R']); // застаріле поле не чіпаємо
+
+    expect(db.clauses.patch(id, { markers: [] })?.markers).toEqual([]);
+  });
+
+  it('позначки не впливають на textHash — діф версій порівнює текст', () => {
+    const id = requireId(s.clauseIds, '10.3');
+    const before = db.clauses.get(id)?.textHash;
+    expect(db.clauses.patch(id, { markers: ['Fundamental'] })?.textHash).toBe(before);
+
+    const a = db.clauses.create(s.specVersionId, { clauseNo: '98.1', requirementText: 'Same text.', markers: ['P'] });
+    const b = db.clauses.create(s.specVersionId, { clauseNo: '98.2', requirementText: 'Same text.', markers: [] });
+    expect(a.textHash).toBe(b.textHash);
+  });
+
+  it('createMany зберігає позначки', () => {
+    const version = db.specs.addVersion({
+      specificationId: s.specificationId,
+      versionLabel: '7.0',
+      blobHash: s.specBlob,
+    });
+    db.clauses.createMany(version.id, [
+      { clauseNo: 'A.5.1', requirementText: 'Policies shall be defined.', markers: ['Control'] },
+      { clauseNo: 'A.5.2', requirementText: 'Roles shall be defined.' },
+    ]);
+    expect(db.clauses.list(version.id).map((c) => [c.clauseNo, c.sortKey, c.markers])).toEqual([
+      ['A.5.1', 'A.005.001', ['Control']],
+      ['A.5.2', 'A.005.002', []],
+    ]);
   });
 
   it('сортування за sortKey, а не лексикографічне', () => {

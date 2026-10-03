@@ -14,6 +14,7 @@ import { documentHandlers } from './documents';
 import { exportHandlers } from './exporting';
 import { findingHandlers } from './findings';
 import { importHandlers } from './importing';
+import { libraryHandlers } from './library';
 import { providerHandlers, type ProviderHandlerOptions } from './providers';
 import { runHandlers } from './runs';
 import { usageHandlers } from './usage';
@@ -31,6 +32,7 @@ export function createHandlers(
 ): IpcHandlers {
   return {
     ...documentHandlers(ctx),
+    ...libraryHandlers(ctx),
     ...specHandlers(ctx),
     ...clauseHandlers(ctx),
     ...importHandlers(ctx),
@@ -51,6 +53,7 @@ export { documentHandlers } from './documents';
 export { exportHandlers } from './exporting';
 export { findingHandlers } from './findings';
 export { importHandlers } from './importing';
+export { libraryHandlers } from './library';
 export {
   defaultProbe,
   providerHandlers,

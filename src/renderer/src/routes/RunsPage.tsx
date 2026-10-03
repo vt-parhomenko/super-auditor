@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 
 import type { AuditRunDto, RunConfig } from '@shared/domain';
 import type { AppSettings, ProviderStatus } from '@shared/ipc';
 import { RunStatusBadge } from '@renderer/components/Badges';
 import { DataTable, type Column } from '@renderer/components/DataTable';
+import { Labeled } from '@renderer/components/InfoTip';
 import {
   DeleteRunButton,
   DeleteRunDialog,
@@ -18,12 +19,13 @@ import { useDocuments } from '@renderer/hooks/useDocuments';
 import { useAnyRunProgress, useEstimateRun, useRunControls, useRuns, useStartRun } from '@renderer/hooks/useRuns';
 import { useProviders, useSettings } from '@renderer/hooks/useSettings';
 import { useSites } from '@renderer/hooks/useSites';
+import { SITE_PROFILES_ENABLED } from '@renderer/lib/features';
 import { useSpecs } from '@renderer/hooks/useSpecs';
 import { useT, type Messages } from '@renderer/i18n';
 import { formatCost, formatDateTime, formatDuration, formatNumber, formatTokens } from '@renderer/lib/format';
 import { useLabels } from '@renderer/lib/labels';
 import {
-  STAGE_DEFAULT_PROVIDER,
+  effectiveRouting,
   choiceWithModel,
   choiceWithProvider,
   findModel,
@@ -43,6 +45,20 @@ export function RunsPage() {
   const controls = useRunControls(progress?.runId ?? null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<DeleteRunTarget | null>(null);
+  /** Документ, з картки якого прийшли: діалог одразу відмічає його найновішу версію. */
+  const [preselectDocumentId, setPreselectDocumentId] = useState<number | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // `/runs?new=1&document=7` — «Створити перевірку» з картки документа. Відкриваємо
+  // діалог і одразу прибираємо параметри з адреси: інакше «Назад» чи оновлення
+  // сторінки відкривали б його знову.
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return;
+    const documentId = Number(searchParams.get('document'));
+    setPreselectDocumentId(Number.isInteger(documentId) && documentId > 0 ? documentId : null);
+    setCreating(true);
+    setSearchParams({}, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const columns: Array<Column<AuditRunDto>> = [
     {
@@ -58,7 +74,12 @@ export function RunsPage() {
       render: (r) => r.label ?? <span className="dim">{t.runs.unnamed}</span>,
       title: (r) => r.label ?? undefined,
     },
-    { key: 'status', header: t.runs.colStatus, width: '120px', render: (r) => <RunStatusBadge status={r.status} /> },
+    {
+      key: 'status',
+      header: t.runs.colStatus,
+      width: '120px',
+      render: (r) => <RunStatusBadge status={r.status} detail={r.error} />,
+    },
     {
       key: 'docs',
       header: t.runs.colDocs,
@@ -69,6 +90,7 @@ export function RunsPage() {
     {
       key: 'model',
       header: t.runs.colModel,
+      hint: t.runs.colModelHint,
       width: '160px',
       render: (r) => <span className="mono xsmall">{r.modelJudge}</span>,
       title: (r) => t.runs.modelTitle(r.modelJudge, r.modelCritic),
@@ -82,25 +104,30 @@ export function RunsPage() {
     {
       key: 'duration',
       header: t.runs.colDuration,
-      width: '104px',
+      hint: t.runs.colDurationHint,
+      width: '124px',
       align: 'right',
       render: (r) => <span className="tabnum xsmall">{formatDuration(r.startedAt, r.finishedAt)}</span>,
     },
     {
-      key: 'delete',
-      header: '',
-      width: '40px',
-      render: (r) => (
-        <DeleteRunButton runId={r.id} onClick={() => setDeleting({ runId: r.id, status: r.status })} />
-      ),
-    },
-    {
       key: 'cost',
       header: t.runs.colCost,
-      width: '92px',
+      hint: t.runs.colCostHint,
+      width: '110px',
       align: 'right',
       render: (r) => <span className="tabnum">{formatCost(r.usage.costUsd)}</span>,
       title: (r) => t.runs.costTitle(formatTokens(r.usage.inputTokens), formatTokens(r.usage.outputTokens)),
+    },
+    // Дія — останньою колонкою: посеред цифр вона розривала «тривалість → вартість»,
+    // а у вузькій колонці кнопка обрізалась до «✕ ..».
+    {
+      key: 'delete',
+      header: <span className="sr-only">{t.runs.colActions}</span>,
+      width: '44px',
+      cellClassName: 'dt-actions',
+      render: (r) => (
+        <DeleteRunButton runId={r.id} onClick={() => setDeleting({ runId: r.id, status: r.status })} />
+      ),
     },
   ];
 
@@ -112,7 +139,7 @@ export function RunsPage() {
           <p className="muted small">{t.runs.subtitle}</p>
         </div>
         <div className="page-head-actions">
-          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
+          <button type="button" className="btn btn-primary" onClick={() => setCreating(true)} data-tour="runs-new">
             {t.runs.newRun}
           </button>
         </div>
@@ -189,7 +216,15 @@ export function RunsPage() {
         )}
       </QueryState>
 
-      {creating && <CreateRunModal onClose={() => setCreating(false)} />}
+      {creating && (
+        <CreateRunModal
+          preselectDocumentId={preselectDocumentId}
+          onClose={() => {
+            setCreating(false);
+            setPreselectDocumentId(null);
+          }}
+        />
+      )}
       {deleting && <DeleteRunDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
   );
@@ -209,20 +244,26 @@ function modelName(modelId: string, providers: readonly ProviderStatus[]): strin
 /** «Claude Opus 5.5 (OpenRouter)» для підказки «як у налаштуваннях». */
 function describeChoice(
   t: Messages,
+  stage: 'judge' | 'critic',
   entry: AppSettings['routing'][keyof AppSettings['routing']],
   providers: readonly ProviderStatus[],
 ): string {
-  const provider = providers.find((p) => p.id === entry?.provider);
-  if (!entry?.model) {
-    return entry?.provider && entry.provider !== STAGE_DEFAULT_PROVIDER
-      ? t.runs.modelOverrideProviderDefault(provider?.label ?? entry.provider)
-      : t.runs.modelOverrideDefault;
-  }
-  const name = findModel(provider, entry.model)?.label || entry.model;
+  // Те саме, що обере main: збережений вибір або вбудована маршрутизація.
+  const effective = effectiveRouting(stage, entry ?? null);
+  if (!effective.model) return t.runs.modelOverrideDefault;
+  const provider = providers.find((p) => p.id === effective.provider);
+  const name = findModel(provider, effective.model)?.label || effective.model;
   return provider ? `${name} (${provider.label})` : name;
 }
 
-function CreateRunModal({ onClose }: { onClose: () => void }) {
+function CreateRunModal({
+  onClose,
+  preselectDocumentId = null,
+}: {
+  onClose: () => void;
+  /** Документ, який відмітити одразу (його найновішу версію). */
+  preselectDocumentId?: number | null;
+}) {
   const t = useT();
   const navigate = useNavigate();
   const specs = useSpecs();
@@ -247,9 +288,10 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
 
   /** Перемикання на власну модель стартує з тієї, що вже стоїть для судження. */
   const startOverride = () => {
-    const judge = settings.data?.routing.judge;
-    const judgeProvider = providerList.find((p) => p.id === judge?.provider);
-    if (judge?.model && judgeProvider) {
+    // Стартуємо з моделі, якою судження пішло б і без перевизначення.
+    const judge = effectiveRouting('judge', settings.data?.routing.judge ?? null);
+    const judgeProvider = providerList.find((p) => p.id === judge.provider);
+    if (judge.model && judgeProvider) {
       // Через choiceWithModel: збережений effort, якого модель не приймає, відкидається.
       setOverride(choiceWithModel(judge, judgeProvider, judge.model));
       return;
@@ -278,9 +320,27 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
     if (ready) setSpecVersionId(ready.id);
   }, [specVersions, specVersionId]);
 
+  // Прийшли з картки документа — відмічаємо його найновішу версію (versions[0]),
+  // щойно бібліотека завантажилась. Лише раз: далі вибір за користувачем.
+  const preselectApplied = useRef(false);
+  useEffect(() => {
+    if (preselectApplied.current || preselectDocumentId == null || !documents.data) return;
+    preselectApplied.current = true;
+    const latest = documents.data.find((d) => d.id === preselectDocumentId)?.versions[0];
+    if (latest) setSelectedDocs(new Set([latest.id]));
+  }, [documents.data, preselectDocumentId]);
+
   const chosenSpec = specVersions.find((v) => v.id === specVersionId);
+  // versions[0] — найновіша (так їх віддає бібліотека); позначаємо її, бо два рядки
+  // з тим самим номером і назвою інакше виглядають як дублікат.
   const versionRows = (documents.data ?? []).flatMap((d) =>
-    d.versions.map((v) => ({ id: v.id, title: d.title, docNumber: d.docNumber, versionLabel: v.versionLabel })),
+    d.versions.map((v, i) => ({
+      id: v.id,
+      title: d.title,
+      docNumber: d.docNumber,
+      versionLabel: v.versionLabel,
+      latest: i === 0 && d.versions.length > 1,
+    })),
   );
 
   // Одна модель на судження й критика: людина обирає «чим аналізувати», а не
@@ -377,23 +437,29 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
                 </option>
               ))}
             </select>
+            {/* Розшифровка «✔» під полем: у самому option довгий текст обрізався. */}
+            <span className="field-hint">{t.runs.specReadyHint}</span>
           </label>
 
-          <label className="field">
-            <span className="label">{t.runs.fieldSite}</span>
-            <select
-              className="select"
-              value={siteProfileId ?? ''}
-              onChange={(e) => setSiteProfileId(Number(e.target.value) || null)}
-            >
-              <option value="">{t.runs.noSite}</option>
-              {(sites.data ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          {/* Профілі виробництва тимчасово приховано (див. lib/features.ts): поле не
+              показуємо, і перевірка йде без профілю — по всіх вимогах стандарту. */}
+          {SITE_PROFILES_ENABLED && (
+            <label className="field">
+              <span className="label">{t.runs.fieldSite}</span>
+              <select
+                className="select"
+                value={siteProfileId ?? ''}
+                onChange={(e) => setSiteProfileId(Number(e.target.value) || null)}
+              >
+                <option value="">{t.runs.noSite}</option>
+                {(sites.data ?? []).map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
 
         {blocked && <div className="callout callout-warn">{t.runs.blockedCallout}</div>}
@@ -420,10 +486,12 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
                   {row.docNumber && <span className="mono dim">{row.docNumber} · </span>}
                   {row.title}
                 </span>
+                {row.latest && <span className="chip">{t.runs.latestTag}</span>}
                 <span className="mono xsmall dim">v{row.versionLabel}</span>
               </label>
             ))}
           </div>
+          <span className="field-hint">{t.runs.documentsHint}</span>
           <div className="row" style={{ marginTop: 4 }}>
             <button
               type="button"
@@ -470,8 +538,8 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
           {override == null ? (
             <span className="field-hint">
               {t.runs.modelOverrideCurrent(
-                describeChoice(t, routing?.judge, providerList),
-                describeChoice(t, routing?.critic, providerList),
+                describeChoice(t, 'judge', routing?.judge, providerList),
+                describeChoice(t, 'critic', routing?.critic, providerList),
               )}
             </span>
           ) : (
@@ -494,13 +562,13 @@ function CreateRunModal({ onClose }: { onClose: () => void }) {
         {estimateData && (
           <div className="estimate-box">
             <div className="col">
-              <span className="stat-label">{t.runs.estimateTasks}</span>
+              <Labeled className="stat-label" label={t.runs.estimateTasks} hint={t.runs.estimateTasksHint} />
               <span className="stat-value" style={{ fontSize: 'var(--fs-xl)' }}>
                 {formatNumber(estimateData.tasks)}
               </span>
             </div>
             <div className="col">
-              <span className="stat-label">{t.runs.estimateInput}</span>
+              <Labeled className="stat-label" label={t.runs.estimateInput} hint={t.runs.estimateInputHint} />
               <span className="stat-value" style={{ fontSize: 'var(--fs-xl)' }}>
                 {formatTokens(estimateData.inputTokens)}
               </span>

@@ -2,12 +2,15 @@ import { Fragment } from 'react';
 import { NavLink, Outlet, Link } from 'react-router-dom';
 
 import { BalanceIndicator } from '@renderer/components/Balance';
+import { BrandMark } from '@renderer/components/BrandMark';
 import { Toasts } from '@renderer/components/Toasts';
+import { GettingStartedButton, TourRoot } from '@renderer/components/tour/TourRoot';
 import { CostMeter } from '@renderer/components/Meters';
 import { useAnyRunProgress } from '@renderer/hooks/useRuns';
 import { useUiLanguageSync } from '@renderer/hooks/useUiLanguageSync';
 import { useT } from '@renderer/i18n';
 import { IS_MOCK } from '@renderer/lib/api';
+import { SITE_PROFILES_ENABLED } from '@renderer/lib/features';
 import { useTopbarStore } from '@renderer/store/topbar';
 import { useUiStore, type ThemePreference } from '@renderer/store/ui';
 
@@ -21,9 +24,10 @@ export function Layout() {
   useUiLanguageSync();
 
   const nav = [
-    { to: '/library', icon: '▤', label: t.nav.library },
+    // Порядок — як іде робота: спершу стандарт, потім документи, потім перевірки.
     { to: '/specs', icon: '§', label: t.nav.specs },
-    { to: '/sites', icon: '⌂', label: t.nav.sites },
+    { to: '/library', icon: '▤', label: t.nav.library },
+    ...(SITE_PROFILES_ENABLED ? [{ to: '/sites', icon: '⌂', label: t.nav.sites }] : []),
     { to: '/runs', icon: '▶', label: t.nav.runs },
     { to: '/settings', icon: '⚙', label: t.nav.settings },
   ];
@@ -38,9 +42,7 @@ export function Layout() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span className="sidebar-mark" aria-hidden="true">
-            SA
-          </span>
+          <BrandMark className="sidebar-mark" />
           <span className="sidebar-title">Super Auditor</span>
         </div>
         <nav className="sidebar-nav" aria-label={t.nav.mainNav}>
@@ -53,6 +55,7 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
+        <GettingStartedButton />
         <div className="sidebar-foot">
           {progress && progress.status === 'running' && (
             <Link to={`/runs/${progress.runId}`} className="xsmall">
@@ -67,6 +70,7 @@ export function Layout() {
                   key={option.value}
                   type="button"
                   title={option.title}
+                  aria-label={option.title}
                   aria-pressed={theme === option.value}
                   className={theme === option.value ? 'active' : ''}
                   onClick={() => setTheme(option.value)}
@@ -115,6 +119,7 @@ export function Layout() {
         <Outlet />
       </div>
 
+      <TourRoot />
       <Toasts />
     </div>
   );

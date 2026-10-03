@@ -5,7 +5,27 @@
  * Tesco v5.0 із секціями 3 / 10 / 14 і двома SOP нідерландського пакувальника.
  */
 
+import type { MarkerLegendItem } from '@shared/domain';
 import { createTestDb, type Db } from './index';
+
+/** Легенда позначок Tesco — слова стандарту зі стор. 10 («Clause Layout»). */
+export const TESCO_MARKER_LEGEND: readonly MarkerLegendItem[] = [
+  {
+    code: 'P',
+    label: 'Policy / procedure',
+    meaning: 'The site must have a documented policy/procedure that has been fully implemented',
+  },
+  {
+    code: 'R',
+    label: 'Records',
+    meaning: 'The site must have comprehensive accurately completed records to demonstrate compliance',
+  },
+  {
+    code: 'O',
+    label: 'Observation',
+    meaning: 'Compliance to the clause will be verified through observation of the site',
+  },
+];
 
 export interface SeedResult {
   db: Db;
@@ -161,6 +181,8 @@ export function seed(options: SeedOptions = {}): SeedResult {
     },
   ];
 
+  db.specs.setMarkerLegend(specVersion.id, TESCO_MARKER_LEGEND);
+
   const clauseIds: Record<string, number> = {};
   for (const def of clauseDefs) {
     const clause = db.clauses.create(specVersion.id, {
@@ -170,6 +192,8 @@ export function seed(options: SeedOptions = {}): SeedResult {
       topic: def.topic,
       requirementText: def.requirementText,
       modules: [...def.modules],
+      // Позначки Tesco — ті самі P/R/O, тепер як надруковані коди стандарту.
+      markers: [...def.modules],
       obligation: def.obligation,
       pageFrom: def.pageFrom,
       pageTo: def.pageTo,

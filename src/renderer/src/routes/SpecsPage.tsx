@@ -1,6 +1,10 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import type { SpecVersionDto, SpecificationDto } from '@shared/domain';
+import type { LibraryDeleteTarget } from '@shared/ipc';
+import { DeleteLibraryButton, DeleteLibraryDialog } from '@renderer/components/DeleteLibraryDialog';
+import { InfoTip } from '@renderer/components/InfoTip';
 import { ProgressBar } from '@renderer/components/Meters';
 import { EmptyState, QueryState } from '@renderer/components/States';
 import { DropZone } from '@renderer/routes/LibraryPage';
@@ -23,6 +27,7 @@ export function SpecsPage() {
   const specs = useSpecs();
   const pick = usePickFiles();
   const importFiles = useImportFiles();
+  const [deleting, setDeleting] = useState<LibraryDeleteTarget | null>(null);
 
   const runImport = (paths: string[]) => {
     if (paths.length === 0) return;
@@ -46,6 +51,7 @@ export function SpecsPage() {
           <button
             type="button"
             className="btn btn-primary"
+            data-tour="specs-import"
             disabled={pick.isPending}
             onClick={() =>
               pick.mutate('specification', {
@@ -81,16 +87,24 @@ export function SpecsPage() {
         {(list) => (
           <div className="doc-list">
             {list.map((spec) => (
-              <SpecCard key={spec.id} spec={spec} />
+              <SpecCard key={spec.id} spec={spec} onDelete={setDeleting} />
             ))}
           </div>
         )}
       </QueryState>
+
+      {deleting && <DeleteLibraryDialog target={deleting} onClose={() => setDeleting(null)} />}
     </div>
   );
 }
 
-function SpecCard({ spec }: { spec: SpecificationDto }) {
+function SpecCard({
+  spec,
+  onDelete,
+}: {
+  spec: SpecificationDto;
+  onDelete: (target: LibraryDeleteTarget) => void;
+}) {
   const t = useT();
   const setCloud = useSetCloudAllowed();
 
@@ -107,10 +121,14 @@ function SpecCard({ spec }: { spec: SpecificationDto }) {
             <span>{t.specs.versionsCount(spec.versions.length)}</span>
           </span>
         </span>
+        <DeleteLibraryButton
+          title={t.deleteLibrary.actionTitle.specification(spec.name)}
+          onClick={() => onDelete({ kind: 'specification', id: spec.id })}
+        />
       </div>
 
       <div style={{ padding: 'var(--sp-3)', borderTop: '1px solid var(--border-subtle)' }}>
-        <label className="checkbox">
+        <label className="checkbox" data-tour="spec-cloud">
           <input
             type="checkbox"
             checked={spec.cloudAllowed}
@@ -135,26 +153,45 @@ function SpecCard({ spec }: { spec: SpecificationDto }) {
         {spec.versions.length === 0 ? (
           <div className="ver-row dim">{t.specs.noVersions}</div>
         ) : (
-          spec.versions.map((v) => <SpecVersionRow key={v.id} version={v} />)
+          spec.versions.map((v) => (
+            <SpecVersionRow
+              key={v.id}
+              version={v}
+              deleteTitle={t.deleteLibrary.actionTitle.specVersion(`${spec.name} v${v.versionLabel}`)}
+              onDelete={() => onDelete({ kind: 'specVersion', id: v.id })}
+            />
+          ))
         )}
       </div>
     </div>
   );
 }
 
-function SpecVersionRow({ version }: { version: SpecVersionDto }) {
+function SpecVersionRow({
+  version,
+  deleteTitle,
+  onDelete,
+}: {
+  version: SpecVersionDto;
+  deleteTitle: string;
+  onDelete: () => void;
+}) {
   const t = useT();
   const labels = useLabels();
   const ready = version.clausesStatus === 'reviewed';
 
   return (
-    <div className="ver-row" style={{ gridTemplateColumns: '70px 150px 1fr 190px auto' }}>
+    <div className="ver-row" style={{ gridTemplateColumns: '70px 150px 1fr 190px auto auto' }}>
       <span className="ver-label">v{version.versionLabel}</span>
       <span className="dim xsmall nowrap">{t.specs.effectiveFrom(formatDate(version.effectiveFrom))}</span>
-      <span className="small">
+      {/* Статус каже «що є», а підказка — «що робити далі»: без вичитки аудит заблоковано. */}
+      <span className="small labeled">
         <span className={ready ? 'badge badge-verified' : 'badge badge-status'}>
           {labels.clausesStatus[version.clausesStatus]}
         </span>
+        <InfoTip about={labels.clausesStatus[version.clausesStatus]}>
+          {t.specs.statusHint[version.clausesStatus]}
+        </InfoTip>
       </span>
       <span style={{ minWidth: 150 }}>
         {version.clauseCount > 0 ? (
@@ -172,6 +209,7 @@ function SpecVersionRow({ version }: { version: SpecVersionDto }) {
       <Link className="btn btn-sm" to={`/specs/${version.id}/clauses`}>
         {t.specs.openRegistry}
       </Link>
+      <DeleteLibraryButton title={deleteTitle} onClick={onDelete} />
     </div>
   );
 }

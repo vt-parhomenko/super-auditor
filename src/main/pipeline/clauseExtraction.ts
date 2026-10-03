@@ -3,14 +3,18 @@ import type { ClauseInput } from '@main/db';
 import { errorText, uiLanguageOf, uiMessages } from '@main/i18n';
 import {
   buildRequest,
-  clauseExtractV1,
+  clauseExtractV2,
+  clip,
   isFatalLlmError,
-  type ClauseExtractItem,
-  type ClauseExtractOutput,
+  markerLegendV1,
+  type ClauseExtractV2Item,
+  type ClauseExtractV2Output,
   type CompleteResult,
   type LlmProvider,
+  type MarkerLegendOutput,
+  type MarkerLegendOutputItem,
 } from '@main/llm';
-import type { Module, Obligation } from '@shared/domain';
+import { markerKey, normalizeMarkers, type MarkerLegendItem, type Obligation } from '@shared/domain';
 
 /**
  * Stage 1 — побудова реєстру вимог зі специфікації.
@@ -23,32 +27,54 @@ import type { Module, Obligation } from '@shared/domain';
  *
  * Нічого з цього не покладається на модель: валідація — чиста функція,
  * і саме вона вирішує, чи можна показувати реєстр як придатний.
+ *
+ * Формат стандарту не зашитий: вимоги бувають таблицею (Tesco) чи нумерованою
+ * прозою (ISO), номери — `10.3`, `A.5.1`, `AF 1.2.3`. Позначки біля вимог
+ * (`markers`) беруться дослівно, а їхня розшифровка — з легенди самого
+ * стандарту одним завершальним викликом (`marker_legend.v1`).
  */
 
 // ─── Відбір сторінок ─────────────────────────────────────────────────────────
 
 /**
- * Ознака сторінки з таблицею вимог.
+ * Номер вимоги на початку рядка: `10.3`, `4.2.1`, `A.5`, `A.5.1`, `AF 1.2.3`,
+ * `FV 5.1.2`. Числовому номеру потрібна хоч одна крапка — інакше кожен
+ * нумерований список («1 The site…») і номер сторінки виглядали б як вимога.
+ */
+const NUMBERED_LINE =
+  /(?:^|\n)[ \t]*(?:\d{1,3}(?:\.\d{1,3})+|[A-Z]\.\d{1,3}(?:\.\d{1,3})*|[A-Z]{2,4}[ \t]?\d{1,3}(?:\.\d{1,3})+)\.?(?=[ \t\n]|$)/g;
+
+/**
+ * Дієслово обов'язку. Стандарти бувають не лише англійською: нідерландською
+ * (moet, dient), німецькою (muss, soll), українською (повинен, необхідно).
+ * Кирилицю шукаємо без `\b`: для `\b` у JS кирилична літера — не «буква».
+ */
+const OBLIGATION_WORD =
+  /\b(?:must|shall|should|required|moet|moeten|dient|dienen|muss|müssen|soll|sollen)\b|повин|необхідно/i;
+
+/**
+ * Ознака сторінки з вимогами — таблицею чи нумерованою прозою.
  *
  * Увага на порядок перевірок: шапку таблиці `P R O | Clause number | Topic |
  * Requirements` покладатись не можна — вона повторюється на ~90 сторінках зі 101,
  * і `stripBoilerplate` знімає її як колонтитул. Після зняття рядок вимоги
- * виглядає як `P R 1.3` — прапорці модулів і номер на початку рядка.
+ * виглядає як `P R 1.3` — прапорці стандарту і номер на початку рядка.
  *
  * Свідомо консервативний: краще віддати моделі зайву сторінку (вона поверне
  * порожній масив), ніж пропустити сторінку з вимогами.
  */
 export function looksLikeClausePage(text: string): boolean {
-  // Прапорці модулів перед номером — найнадійніша ознака, переживає зняття шапки.
+  // Прапорці Tesco перед номером — найнадійніша ознака, переживає зняття шапки.
   if (/(?:^|\n)[ \t]*(?:[PRO][ \t]+){1,3}\d{1,2}\.\d{1,3}\b/.test(text)) return true;
 
   // Шапка таблиці, якщо вона все ж лишилась (інший стандарт, стрипінг вимкнено).
   if (/clause\s*number/i.test(text)) return true;
 
-  // Запасна ознака для стандартів без прапорців: кілька нумерованих вимог
-  // із дієсловом обов'язку.
-  const numbered = text.match(/(?:^|\n)[ \t]*\d{1,2}\.\d{1,3}[ \t]/g)?.length ?? 0;
-  return numbered >= 2 && /\b(must|shall|should)\b/i.test(text);
+  // Стандарти без прапорців: нумерована вимога з дієсловом обов'язку. Одного
+  // номера досить — сторінка прози ISO нерідко містить рівно один пункт
+  // («8.5.1 … The organization shall …»), і вимогу на ній втрачати не можна.
+  const numbered = text.match(NUMBERED_LINE)?.length ?? 0;
+  return numbered >= 1 && OBLIGATION_WORD.test(text);
 }
 
 export interface PageSelection {
@@ -87,7 +113,7 @@ export function selectClausePages(
 
 // ─── Зшивання розірваних вимог ─────────────────────────────────────────────
 
-export interface ExtractedClause extends ClauseExtractItem {
+export interface ExtractedClause extends ClauseExtractV2Item {
   pageFrom: number;
   pageTo: number;
 }
@@ -99,7 +125,7 @@ export interface ExtractedClause extends ClauseExtractItem {
  * вимогу в PDF за посиланням.
  */
 export function mergeContinuations(
-  perPage: ReadonlyArray<{ pageNo: number; clauses: readonly ClauseExtractItem[] }>,
+  perPage: ReadonlyArray<{ pageNo: number; clauses: readonly ClauseExtractV2Item[] }>,
 ): ExtractedClause[] {
   const byNo = new Map<string, ExtractedClause>();
   const order: string[] = [];
@@ -121,7 +147,8 @@ export function mergeContinuations(
       existing.pageTo = pageNo;
       existing.topic ??= item.topic;
       existing.sectionTitle ??= item.sectionTitle;
-      if (existing.modules.length === 0) existing.modules = item.modules;
+      // Позначки друкуються в рядку, де вимога починається; продовження зазвичай без них.
+      if (existing.markers.length === 0) existing.markers = item.markers;
     }
   }
 
@@ -159,7 +186,36 @@ export interface ValidationReport {
   flagged: Set<string>;
 }
 
-const CLAUSE_NO = /^\d{1,2}(\.\d{1,3})*$/;
+/**
+ * Номер вимоги: `10.3`, `4.2.1`, `A.5.1`, `AF 1.2.3`, `FV 5.1.2`, з необов'язковою
+ * літерою в кінці (`10.3a`). Префікс — до чотирьох великих літер через пробіл,
+ * крапку чи дефіс або впритул. Слово на кшталт «Requirements» сюди не пролізе.
+ */
+const CLAUSE_NO = /^(?:[A-Z]{1,4}[ .-]?)?\d{1,3}(?:\.\d{1,3})*[a-z]?$/;
+
+/** Скільки пропущених номерів перелічувати в повідомленні — решта стискається в «…». */
+const GAP_LIST_LIMIT = 5;
+
+/**
+ * Позиції номера в нумерації: «батько» — номер без останньої частини, «крок» —
+ * останнє число. `A.5.3` → ('A.5', 3), ('A', 5); `AF 1.2.3` → ('AF 1.2', 3), ('AF 1', 2).
+ *
+ * Предки реєструються теж: `7.1.5.1` означає, що пункт `7.1.5` існує (хай навіть
+ * як заголовок над підпунктами без власного тексту), — інакше перехід
+ * 7.1.4 → 7.1.6 виглядав би як пропуск. Верхній рівень (самі секції) не
+ * перевіряємо: стандарти пропускають номери секцій свідомо.
+ */
+function numberingSteps(clauseNo: string): Array<{ parent: string; step: number }> {
+  const parts = clauseNo.trim().split('.').map((p) => p.trim());
+  const out: Array<{ parent: string; step: number }> = [];
+  for (let depth = parts.length - 1; depth >= 1; depth -= 1) {
+    const last = parts[depth] ?? '';
+    // `10.3a` — літерний підпункт: числової послідовності на цьому рівні немає.
+    if (!/^\d{1,3}$/.test(last)) break;
+    out.push({ parent: parts.slice(0, depth).join('.'), step: Number(last) });
+  }
+  return out;
+}
 
 /**
  * Механічна перевірка реєстру. Пропуск у нумерації всередині секції — найважливіший
@@ -197,34 +253,127 @@ export function validateClauses(clauses: readonly ExtractedClause[]): Validation
     }
   }
 
-  // Пропуски в нумерації рахуємо в межах секції: між стандартами нумерація різна,
-  // але всередині однієї секції вона майже завжди суцільна.
-  const bySection = new Map<string, number[]>();
+  // Пропуски в нумерації рахуємо в межах «батька» (секції, підсекції): між
+  // стандартами нумерація різна, але всередині одного рівня вона майже завжди
+  // суцільна. Для кожного кроку пам'ятаємо першу вимогу, що його зайняла, —
+  // її й позначаємо, бо самого номера-заголовка в реєстрі може не бути.
+  const byParent = new Map<string, Map<number, string>>();
   for (const c of clauses) {
-    const match = /^(\d{1,2})\.(\d{1,3})$/.exec(c.clauseNo);
-    if (!match?.[1] || !match[2]) continue;
-    const list = bySection.get(match[1]) ?? [];
-    list.push(Number(match[2]));
-    bySection.set(match[1], list);
+    for (const { parent, step } of numberingSteps(c.clauseNo)) {
+      const steps = byParent.get(parent) ?? new Map<number, string>();
+      if (!steps.has(step)) steps.set(step, c.clauseNo);
+      byParent.set(parent, steps);
+    }
   }
 
-  for (const [section, numbers] of bySection) {
-    const sorted = [...new Set(numbers)].sort((a, b) => a - b);
+  for (const [parent, steps] of byParent) {
+    const sorted = [...steps.keys()].sort((a, b) => a - b);
     for (let i = 1; i < sorted.length; i += 1) {
       const prev = sorted[i - 1]!;
       const curr = sorted[i]!;
-      if (curr - prev > 1) {
-        const missing = Array.from({ length: curr - prev - 1 }, (_, k) => `${section}.${prev + k + 1}`);
-        flag(
-          'numbering_gap',
-          `${section}.${curr}`,
-          `Пропущено ${missing.join(', ')} — можливо, вимогу не витягнуто`,
-        );
-      }
+      if (curr - prev <= 1) continue;
+      const count = curr - prev - 1;
+      const missing = Array.from(
+        { length: Math.min(count, GAP_LIST_LIMIT) },
+        (_, k) => `${parent}.${prev + k + 1}`,
+      );
+      const listed = count > GAP_LIST_LIMIT ? `${missing.join(', ')}… (${count})` : missing.join(', ');
+      flag(
+        'numbering_gap',
+        steps.get(curr) ?? `${parent}.${curr}`,
+        `Пропущено ${listed} — можливо, вимогу не витягнуто`,
+      );
     }
   }
 
   return { issues, flagged };
+}
+
+// ─── Легенда позначок ────────────────────────────────────────────────────────
+
+/** Скільки символів вступу віддаємо моделі для легенди. Вступ Tesco (11 сторінок) влазить цілком. */
+export const LEGEND_INTRO_MAX_CHARS = 40_000;
+/** Скільки перших сторінок брати, коли вимоги починаються з першої ж сторінки. */
+export const LEGEND_FALLBACK_PAGES = 8;
+
+/** Різні позначки реєстру в порядку першої появи. */
+export function distinctMarkers(clauses: ReadonlyArray<{ markers: readonly string[] }>): string[] {
+  const out: string[] = [];
+  for (const clause of clauses) {
+    for (const marker of clause.markers) if (!out.includes(marker)) out.push(marker);
+  }
+  return out;
+}
+
+export interface LegendSource {
+  pageFrom: number;
+  pageTo: number;
+  text: string;
+}
+
+/**
+ * Звідки читати легенду: стандарти пояснюють свої позначки у вступі — перед
+ * першою сторінкою з вимогами («Clause Layout» у Tesco, стор. 10). Якщо
+ * вимоги починаються з першої сторінки, беремо перші `LEGEND_FALLBACK_PAGES`.
+ * Текст обрізається до `LEGEND_INTRO_MAX_CHARS` з явною позначкою обрізання.
+ */
+export function legendSource(pages: readonly string[], firstClausePage: number | null): LegendSource | null {
+  if (pages.length === 0) return null;
+  const before = firstClausePage !== null ? firstClausePage - 1 : 0;
+  const pageTo = before >= 1 ? Math.min(before, pages.length) : Math.min(LEGEND_FALLBACK_PAGES, pages.length);
+  const text = pages
+    .slice(0, pageTo)
+    .map((page, i) => `--- page ${i + 1} ---\n${page.trim()}`)
+    .join('\n\n');
+  return { pageFrom: 1, pageTo, text: clip(text, LEGEND_INTRO_MAX_CHARS) };
+}
+
+/**
+ * Зводить відповідь моделі з тим, що реально стоїть біля вимог:
+ *  - код — у написанні реєстру (інакше підказка не знайде свій значок);
+ *  - позначки, яких у реєстрі немає, відкидаються — модель їх вигадала;
+ *  - на кожну позначку реєстру рівно один пункт; непояснені — в кінці, з `meaning: null`.
+ *
+ * null, якщо стандарт не пояснив жодної позначки: тоді в UI чесне «стандарт
+ * не пояснює ці позначки», а не легенда виду «P — P».
+ */
+export function reconcileLegend(
+  codes: readonly string[],
+  items: readonly MarkerLegendOutputItem[],
+): MarkerLegendItem[] | null {
+  const byKey = new Map(codes.map((code) => [markerKey(code), code]));
+  const out: MarkerLegendItem[] = [];
+  const seen = new Set<string>();
+
+  for (const item of items) {
+    const code = byKey.get(markerKey(item.code));
+    if (code === undefined || seen.has(code)) continue;
+    seen.add(code);
+    const label = item.label.replace(/\s+/g, ' ').trim();
+    const meaning = item.meaning?.trim() ?? '';
+    out.push({ code, label: label || code, meaning: meaning || null });
+  }
+  for (const code of codes) {
+    if (!seen.has(code)) out.push({ code, label: code, meaning: null });
+  }
+
+  const explained = out.some((item) => item.meaning !== null || item.label !== item.code);
+  return explained ? out : null;
+}
+
+/**
+ * Чи пояснює наявна легенда кожну з позначок. Потрібно, щоб повторна
+ * екстракція не стирала легенду, якої з тексту не прочитати: у Tesco
+ * розшифровка P/R/O — це діаграма на стор. 10, у витягнутому тексті її немає,
+ * тож легенда цієї версії відома лише з міграції 4 (слова стандарту).
+ */
+export function legendCovers(
+  legend: readonly MarkerLegendItem[] | null,
+  codes: readonly string[],
+): legend is MarkerLegendItem[] {
+  if (!legend || legend.length === 0 || codes.length === 0) return false;
+  const known = new Set(legend.map((item) => markerKey(item.code)));
+  return codes.every((code) => known.has(markerKey(code)));
 }
 
 // ─── Оркестрація ─────────────────────────────────────────────────────────────
@@ -258,7 +407,28 @@ export interface ClauseExtractionReport {
   issues: ClauseIssue[];
   flaggedCount: number;
   failedPages: Array<{ pageNo: number; error: string }>;
+  /** Збережена легенда позначок; null — позначок немає, стандарт їх не пояснює або виклик не вдався. */
+  markerLegend: MarkerLegendItem[] | null;
+  /**
+   * Чому легенду не прочитано (мовою інтерфейсу). Екстракцію це не зриває —
+   * реєстр збережено, позначки показуються без розшифровки.
+   */
+  legendError: string | null;
   usage: { inputTokens: number; cachedTokens: number; outputTokens: number; costUsd: number };
+}
+
+/**
+ * Відповідь моделі → придатний до злиття вигляд: позначки нормалізовані
+ * (« P », дублі, «позначка» на пів речення), порожній `sectionNo` — це null.
+ */
+function sanitizeItem(item: ClauseExtractV2Item): ClauseExtractV2Item {
+  const sectionNo = item.sectionNo?.trim() ?? '';
+  return {
+    ...item,
+    clauseNo: item.clauseNo.trim(),
+    sectionNo: sectionNo.length > 0 ? sectionNo : null,
+    markers: normalizeMarkers(item.markers),
+  };
 }
 
 /**
@@ -290,9 +460,15 @@ export async function extractClausesForSpec(
     to: options.to,
   });
 
-  const perPage: Array<{ pageNo: number; clauses: ClauseExtractItem[] }> = [];
+  const perPage: Array<{ pageNo: number; clauses: ClauseExtractV2Item[] }> = [];
   const failedPages: ClauseExtractionReport['failedPages'] = [];
   const usage = { inputTokens: 0, cachedTokens: 0, outputTokens: 0, costUsd: 0 };
+  const addUsage = (result: CompleteResult<unknown>): void => {
+    usage.inputTokens += result.usage.input;
+    usage.cachedTokens += result.usage.cachedInput;
+    usage.outputTokens += result.usage.output;
+    usage.costUsd += result.costUsd;
+  };
   let processed = 0;
 
   const controller = new AbortController();
@@ -303,7 +479,7 @@ export async function extractClausesForSpec(
 
   const runPage = async (page: PageSelection): Promise<void> => {
     const request = buildRequest(
-      clauseExtractV1,
+      clauseExtractV2,
       {
         specName: spec?.name ?? 'Specification',
         specVersion: version.versionLabel,
@@ -316,16 +492,12 @@ export async function extractClausesForSpec(
     );
 
     try {
-      const result: CompleteResult<ClauseExtractOutput> = await provider.complete(
+      const result: CompleteResult<ClauseExtractV2Output> = await provider.complete(
         request,
         controller.signal,
       );
-      perPage.push({ pageNo: page.pageNo, clauses: result.data.clauses });
-
-      usage.inputTokens += result.usage.input;
-      usage.cachedTokens += result.usage.cachedInput;
-      usage.outputTokens += result.usage.output;
-      usage.costUsd += result.costUsd;
+      perPage.push({ pageNo: page.pageNo, clauses: result.data.clauses.map(sanitizeItem) });
+      addUsage(result);
 
       processed += 1;
       options.onProgress?.({
@@ -391,17 +563,61 @@ export async function extractClausesForSpec(
     sectionNo: c.sectionNo ?? sectionOf(c.clauseNo),
     sectionTitle: c.sectionTitle,
     topic: c.topic,
-    modules: c.modules as Module[],
+    // Застаріле поле профілів виробництва: нова екстракція його не заповнює,
+    // і прихований фільтр застосовності вважає такі вимоги «завжди застосовними».
+    modules: [],
+    markers: c.markers,
     obligation: (c.obligation ?? inferObligation(c.requirementText)) as Obligation | null,
     pageFrom: c.pageFrom,
     pageTo: c.pageTo,
     reviewStatus: validation.flagged.has(c.clauseNo) ? 'flagged' : 'auto',
   }));
 
+  // Легенда позначок — один виклик на всю версію і лише тоді, коли позначки є.
+  // Її невдача реєстр не зриває: вимоги вже витягнуто й оплачено, а позначки
+  // без розшифровки — менша біда, ніж втрачений реєстр.
+  const codes = distinctMarkers(merged);
+  let markerLegend: MarkerLegendItem[] | null = null;
+  let legendError: string | null = null;
+  const firstClausePage = merged.length > 0 ? Math.min(...merged.map((c) => c.pageFrom)) : null;
+  const source =
+    codes.length > 0 && !controller.signal.aborted ? legendSource(pages, firstClausePage) : null;
+  if (source) {
+    try {
+      const request = buildRequest(
+        markerLegendV1,
+        {
+          specName: spec?.name ?? 'Specification',
+          specVersion: version.versionLabel,
+          codes,
+          introText: source.text,
+          pageFrom: source.pageFrom,
+          pageTo: source.pageTo,
+        },
+        options.model ? { model: options.model } : {},
+      );
+      const result: CompleteResult<MarkerLegendOutput> = await provider.complete(request, controller.signal);
+      addUsage(result);
+      markerLegend = reconcileLegend(codes, result.data.items);
+    } catch (error) {
+      // Скасування — не збій легенди: попереджати нема про що.
+      if (!controller.signal.aborted) legendError = errorText(uiLanguage, error);
+    }
+  }
+  // Нова легенда нічого не пояснила (чи виклик не вдався), а стара пояснює всі
+  // позначки цієї ж версії стандарту — лишаємо стару: той самий PDF, ті самі
+  // коди, і відомі слова стандарту не мають зникати від повторної екстракції.
+  if (markerLegend === null && legendCovers(version.markerLegend, codes)) {
+    markerLegend = version.markerLegend;
+  }
+
+  // Реєстр і його легенда — одна транзакція: легенда від старого реєстру
+  // поруч із новими позначками брехала б.
   const stored = db.transaction(() => {
     db.clauses.deleteAll(specVersionId);
     const count = db.clauses.createMany(specVersionId, inputs);
     db.specs.setClausesStatus(specVersionId, 'extracted');
+    db.specs.setMarkerLegend(specVersionId, markerLegend);
     return count;
   });
 
@@ -420,12 +636,23 @@ export async function extractClausesForSpec(
     issues: validation.issues,
     flaggedCount: validation.flagged.size,
     failedPages,
+    markerLegend,
+    legendError,
     usage,
   };
 }
 
-function sectionOf(clauseNo: string): string | null {
-  return /^(\d{1,2})\./.exec(clauseNo)?.[1] ?? null;
+/**
+ * Секція за номером — запасний варіант, коли модель `sectionNo` не повернула.
+ * '10.3' → '10', 'AF 1.2.3' → 'AF 1', а додаток ISO 'A.5.1' → 'A.5': сама
+ * літера «A» — це весь додаток, а секцією в ньому є 'A.5'.
+ */
+export function sectionOf(clauseNo: string): string | null {
+  const parts = clauseNo.trim().split('.').map((p) => p.trim());
+  const head = parts[0] ?? '';
+  if (parts.length < 2 || head.length === 0) return null;
+  if (/^[A-Z]$/i.test(head) && parts.length >= 3 && parts[1]) return `${head}.${parts[1]}`;
+  return head;
 }
 
 /** `must` — обов'язок, `should` — рекомендація. Впливає на severity в Stage 4. */

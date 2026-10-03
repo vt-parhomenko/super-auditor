@@ -22,6 +22,7 @@ function clause(overrides: Partial<ClauseDto> = {}): ClauseDto {
     topic: 'Management review',
     requirementText: 'Site management must regularly review all activities…',
     modules: [],
+    markers: [],
     obligation: 'must',
     pageFrom: 12,
     pageTo: 12,

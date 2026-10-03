@@ -15,6 +15,7 @@ import type { IpcEmitter } from '@main/ipc/events';
 import type { RunEstimate, RunOrchestrator } from '@main/ipc/orchestratorPort';
 import {
   DEFAULT_ROUTING,
+  PROMPT_VERSIONS,
   buildRequest,
   docProfileV1,
   getPricing,
@@ -127,6 +128,9 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
       if (report.flaggedCount > 0) {
         events.toast('warn', ui().clauses.flagged(report.flaggedCount));
       }
+      if (report.legendError !== null) {
+        events.toast('warn', ui().clauses.markerLegendFailed(report.legendError));
+      }
 
       return report.clausesStored;
     },
@@ -231,7 +235,9 @@ export function createOrchestrator(deps: OrchestratorDeps): RunOrchestrator {
         {
           judge: judge.model.model,
           critic: critic?.model.model ?? null,
-          promptVersion: 'judge.v1',
+          // Версія з реєстру промптів, а не літерал: інакше прогін на judge.v2
+          // записувався б як judge.v1, і «чому результат інший» не мало б відповіді.
+          promptVersion: PROMPT_VERSIONS.judge,
         },
         { scope: new Map([...scope].map(([id, s]) => [id, s.sections])), routing },
       );
@@ -533,10 +539,26 @@ function renderMarkdown(
       lines.push(f.rationale, '');
       if (f.gap) lines.push(`**${m.gapLabel}:** ${f.gap}`, '');
       if (f.recommendation) lines.push(`**${m.recommendationLabel}:** ${f.recommendation}`, '');
+      if (f.outsideEvidence) lines.push(`**${m.outsideEvidenceLabel}:** ${f.outsideEvidence}`, '');
       for (const e of f.evidence) {
         lines.push(`> ${e.quote}${e.pageNo ? ` _(${m.page(e.pageNo)})_` : ''}`);
       }
       lines.push('');
+    }
+  }
+
+  // Що перевірити на аудиті поза документом — і там, де документ відповідає:
+  // процедура може бути бездоганною, а записів за нею аудитор ще не бачив.
+  // Невідповідності вище вже несуть цей рядок, тут — решта.
+  const toVerify = findings.filter(
+    (f) => f.outsideEvidence && f.verdict !== 'non_compliant' && f.verdict !== 'partial',
+  );
+  if (toVerify.length > 0) {
+    lines.push(`## ${m.outsideEvidenceTitle}`, '');
+    for (const f of toVerify) {
+      lines.push(`### ${f.clause.clauseNo} — ${f.clause.topic ?? ''}`.trim());
+      lines.push(`**${m.verdictLabel}:** ${m.verdicts[f.verdict]}`, '');
+      lines.push(`**${m.outsideEvidenceLabel}:** ${f.outsideEvidence}`, '');
     }
   }
 

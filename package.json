@@ -46,7 +46,11 @@
   "build": {
     "appId": "parts.aplusauto.superauditor",
     "productName": "Super Auditor",
-    "files": ["out/**/*"],
-    "directories": { "buildResources": "resources" }
+    "files": ["out/**/*", "resources/icon.ico", "resources/icon.png"],
+    "asarUnpack": ["resources/icon.ico", "resources/icon.png"],
+    "directories": { "buildResources": "resources" },
+    "win": { "icon": "resources/icon.ico" },
+    "mac": { "icon": "resources/icon.png" },
+    "linux": { "icon": "resources/icon.png" }
   }
 }

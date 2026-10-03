@@ -14,6 +14,7 @@ import { DocProfilesRepo } from './repos/docProfiles';
 import { DocumentsRepo } from './repos/documents';
 import { ExtractionsRepo } from './repos/extractions';
 import { FindingsRepo } from './repos/findings';
+import { LibraryDeletionRepo } from './repos/libraryDeletion';
 import { LlmCacheRepo } from './repos/llmCache';
 import { RunTasksRepo, RunsRepo } from './repos/runs';
 import { SettingsRepo } from './repos/settings';
@@ -39,6 +40,8 @@ export interface Db {
   readonly llmCache: LlmCacheRepo;
   readonly settings: SettingsRepo;
   readonly spend: SpendRepo;
+  /** Видалення специфікацій і документів разом із перевірками, що на них спираються. */
+  readonly libraryDeletion: LibraryDeletionRepo;
 
   /** Версія схеми (`PRAGMA user_version`). */
   schemaVersion(): number;
@@ -70,6 +73,7 @@ class DbImpl implements Db {
   readonly llmCache: LlmCacheRepo;
   readonly settings: SettingsRepo;
   readonly spend: SpendRepo;
+  readonly libraryDeletion: LibraryDeletionRepo;
 
   constructor(raw: SqliteDb) {
     this.raw = raw;
@@ -86,6 +90,7 @@ class DbImpl implements Db {
     this.llmCache = new LlmCacheRepo(raw);
     this.settings = new SettingsRepo(raw);
     this.spend = new SpendRepo(raw);
+    this.libraryDeletion = new LibraryDeletionRepo(raw);
   }
 
   schemaVersion(): number {
@@ -155,6 +160,11 @@ export {
   type FindingPage,
   type HumanReviewInput,
 } from './repos/findings';
+export {
+  LibraryDeletionRepo,
+  type LibraryDeletionPlan,
+  type LibraryDeletionRun,
+} from './repos/libraryDeletion';
 export { LlmCacheRepo, type LlmCallInput, type UsageAggregate } from './repos/llmCache';
 export {
   RunTasksRepo,

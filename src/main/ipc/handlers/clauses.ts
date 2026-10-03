@@ -9,7 +9,7 @@ import type { IpcHandlers } from '@shared/ipc';
 import type { IpcContext } from '../context';
 import { notFound, validation } from '../errors';
 import { requireOrchestrator } from '../orchestratorPort';
-import { requireClause, requireId, requireSpecVersion } from './guards';
+import { requireClause, requireId, requireMarkers, requireSpecVersion } from './guards';
 
 export type ClauseHandlers = Pick<
   IpcHandlers,
@@ -32,7 +32,8 @@ export function clauseHandlers(ctx: IpcContext): ClauseHandlers {
 
     'clauses:patch': (clauseId, patch) => {
       requireClause(db, clauseId);
-      const updated = db.clauses.patch(clauseId, patch);
+      const markers = patch?.markers === undefined ? undefined : requireMarkers(patch.markers);
+      const updated = db.clauses.patch(clauseId, markers === undefined ? patch : { ...patch, markers });
       if (!updated) throw notFound('clause', clauseId);
       return updated;
     },
@@ -43,12 +44,14 @@ export function clauseHandlers(ctx: IpcContext): ClauseHandlers {
       const requirementText = String(clause?.requirementText ?? '').trim();
       if (clauseNo.length === 0) throw validation((m) => m.clauseEditing.numberEmpty);
       if (requirementText.length === 0) throw validation((m) => m.clauseEditing.textEmpty);
+      const markers = clause.markers === undefined ? undefined : requireMarkers(clause.markers);
 
       // Вимога, додана людиною, вичитаною вже є за визначенням.
       return db.clauses.create(specVersionId, {
         ...clause,
         clauseNo,
         requirementText,
+        ...(markers !== undefined ? { markers } : {}),
         reviewStatus: 'edited',
       });
     },

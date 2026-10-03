@@ -33,12 +33,16 @@ export function useSetCloudAllowed() {
   });
 }
 
+/** Версія стандарту, за якою йшов прогін: runs:get → specVersionId → specs:version. */
+export function useRunSpecVersion(runId: number | null) {
+  const run = useRun(runId);
+  return useSpecVersion(run.data?.specVersionId ?? null);
+}
+
 /**
- * Хеш блоба стандарту для прогону: runs:get → specVersionId → specs:version → blobHash.
- * Потрібен, щоб відкрити PDF саме тієї версії стандарту, за якою йшов аудит.
+ * Хеш блоба стандарту для прогону — щоб відкрити PDF саме тієї версії
+ * стандарту, за якою йшов аудит.
  */
 export function useRunSpecBlobHash(runId: number | null): string | null {
-  const run = useRun(runId);
-  const version = useSpecVersion(run.data?.specVersionId ?? null);
-  return version.data?.blobHash ?? null;
+  return useRunSpecVersion(runId).data?.blobHash ?? null;
 }

@@ -30,7 +30,8 @@ const router = createHashRouter([
     element: <Layout />,
     errorElement: <RouteErrorPage />,
     children: [
-      { index: true, element: <Navigate to="/library" replace /> },
+      // Стартова сторінка — перший пункт меню: робота починається зі стандарту.
+      { index: true, element: <Navigate to="/specs" replace /> },
 
       { path: 'library', element: <LibraryPage /> },
       { path: 'library/:documentId/runs', element: <DocumentRunsPage /> },

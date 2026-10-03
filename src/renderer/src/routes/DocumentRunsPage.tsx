@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import type { DocumentRunStats } from '@shared/domain';
 import { RunStatusBadge } from '@renderer/components/Badges';
+import { DeleteLibraryButton, DeleteLibraryDialog } from '@renderer/components/DeleteLibraryDialog';
 import { DataTable, type Column } from '@renderer/components/DataTable';
 import {
   DeleteRunButton,
@@ -14,6 +15,7 @@ import { EmptyState, QueryState } from '@renderer/components/States';
 import { useDocument, useDocumentRuns } from '@renderer/hooks/useDocuments';
 import { useT } from '@renderer/i18n';
 import { formatDateTime, formatPercent } from '@renderer/lib/format';
+import { documentDisplayName } from '@renderer/lib/libraryDeletion';
 import { usePageContext } from '@renderer/store/topbar';
 
 /**
@@ -33,6 +35,8 @@ export function DocumentRunsPage() {
   const doc = useDocument(valid ? documentId : null);
   const runs = useDocumentRuns(valid ? documentId : null);
   const [deleting, setDeleting] = useState<DeleteRunTarget | null>(null);
+  // Видалення самого документа: вікно саме поверне в бібліотеку, коли сторінки не стане.
+  const [deletingDocument, setDeletingDocument] = useState(false);
 
   const docTitle = doc.data?.title ?? '…';
   usePageContext([
@@ -88,39 +92,47 @@ export function DocumentRunsPage() {
     {
       key: 'relevant',
       header: t.docRuns.colRelevant,
-      width: '110px',
+      hint: t.runStats.relevantHint,
+      width: '118px',
       align: 'right',
       render: (r) => (
-        <span className="tabnum" title={t.runStats.relevantHint}>
+        <span className="tabnum">
           {r.relevant}
           <span className="dim"> / {r.assessed}</span>
         </span>
       ),
+      title: (r) => t.runStats.relevantSub(formatPercent(r.relevant, r.assessed)),
     },
     {
       key: 'issues',
       header: t.docRuns.colIssues,
-      width: '210px',
+      hint: t.runStats.issuesHint,
+      width: '220px',
       render: (r) => <SeverityChips counts={r.severityCounts} />,
     },
-    {
-      key: 'delete',
-      header: '',
-      width: '40px',
-      render: (r) => (
-        <DeleteRunButton runId={r.runId} onClick={() => setDeleting({ runId: r.runId, status: r.status })} />
-      ),
-    },
+    // Та сама форма «N / з оцінених», що й «Покриває»: «10% (3)» читалося як загадка.
     {
       key: 'reviewed',
       header: t.docRuns.colReviewed,
-      width: '108px',
+      hint: t.runStats.reviewedHint,
+      width: '128px',
       align: 'right',
       render: (r) => (
         <span className="tabnum">
-          {formatPercent(r.reviewed, r.assessed)}
-          <span className="dim"> ({r.reviewed})</span>
+          {r.reviewed}
+          <span className="dim"> / {r.assessed}</span>
         </span>
+      ),
+      title: (r) => t.runStats.reviewedSub(formatPercent(r.reviewed, r.assessed)),
+    },
+    // Дія — останньою: посеред цифр вона розривала таблицю й обрізалась до «✕ ..».
+    {
+      key: 'delete',
+      header: <span className="sr-only">{t.runs.colActions}</span>,
+      width: '44px',
+      cellClassName: 'dt-actions',
+      render: (r) => (
+        <DeleteRunButton runId={r.runId} onClick={() => setDeleting({ runId: r.runId, status: r.status })} />
       ),
     },
   ];
@@ -133,6 +145,12 @@ export function DocumentRunsPage() {
           <p className="muted small">{t.docRuns.subtitle}</p>
         </div>
         <div className="page-head-actions">
+          {doc.data && (
+            <DeleteLibraryButton
+              title={t.deleteLibrary.actionTitle.document(documentDisplayName(doc.data.title, doc.data.docNumber))}
+              onClick={() => setDeletingDocument(true)}
+            />
+          )}
           <Link className="btn" to="/library">
             {t.docRuns.toLibrary}
           </Link>
@@ -151,7 +169,7 @@ export function DocumentRunsPage() {
             title={t.docRuns.emptyTitle}
             description={t.docRuns.emptyDesc}
             action={
-              <Link className="btn btn-primary" to="/runs">
+              <Link className="btn btn-primary" to={`/runs?new=1&document=${documentId}`}>
                 {t.docRuns.startRun}
               </Link>
             }
@@ -170,6 +188,12 @@ export function DocumentRunsPage() {
       </QueryState>
 
       {deleting && <DeleteRunDialog target={deleting} onClose={() => setDeleting(null)} />}
+      {deletingDocument && valid && (
+        <DeleteLibraryDialog
+          target={{ kind: 'document', id: documentId }}
+          onClose={() => setDeletingDocument(false)}
+        />
+      )}
     </div>
   );
 }

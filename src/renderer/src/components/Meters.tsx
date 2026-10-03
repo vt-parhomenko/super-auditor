@@ -1,4 +1,7 @@
+import type { ReactNode } from 'react';
+
 import type { UsageTotals } from '@shared/domain';
+import { Labeled } from '@renderer/components/InfoTip';
 import { useT } from '@renderer/i18n';
 import { formatCost, formatPercent, formatTokens } from '@renderer/lib/format';
 
@@ -66,20 +69,23 @@ export function CostMeter({ usage, compact = false }: { usage: UsageTotals; comp
   );
 }
 
+/** `hint` — «як читати це число»: значок «ⓘ» поруч із підписом плитки. */
 export function Stat({
   label,
   value,
   sub,
   tone,
+  hint,
 }: {
-  label: string;
+  label: ReactNode;
   value: string | number;
   sub?: string;
   tone?: string;
+  hint?: ReactNode;
 }) {
   return (
     <div className="stat">
-      <span className="stat-label">{label}</span>
+      <Labeled className="stat-label" label={label} hint={hint} />
       <span className={`stat-value ${tone ?? ''}`}>{value}</span>
       {sub && <span className="stat-sub">{sub}</span>}
     </div>

@@ -30,10 +30,10 @@ export function RunDetailPage() {
   const [deleting, setDeleting] = useState<DeleteRunTarget | null>(null);
 
   const tabs = [
-    { to: 'coverage', label: t.runDetail.tabCoverage },
-    { to: 'findings', label: t.runDetail.tabFindings },
-    { to: 'gaps', label: t.runDetail.tabGaps },
-    { to: 'summary', label: t.runDetail.tabSummary },
+    { to: 'coverage', label: t.runDetail.tabCoverage, hint: t.runDetail.tabHint.coverage },
+    { to: 'findings', label: t.runDetail.tabFindings, hint: t.runDetail.tabHint.findings },
+    { to: 'gaps', label: t.runDetail.tabGaps, hint: t.runDetail.tabHint.gaps },
+    { to: 'summary', label: t.runDetail.tabSummary, hint: t.runDetail.tabHint.summary },
   ];
 
   usePageContext([
@@ -55,8 +55,8 @@ export function RunDetailPage() {
           <h2 className="truncate" style={{ maxWidth: '46ch' }}>
             {data.label ?? t.runs.runTitle(data.id)}
           </h2>
-          <RunStatusBadge status={data.status} />
-          <span className="dim xsmall nowrap">
+          <RunStatusBadge status={data.status} detail={data.error} />
+          <span className="dim xsmall nowrap" title={`${t.runs.colStarted} · ${t.runs.colDuration}`}>
             {formatDateTime(data.startedAt)} · {formatDuration(data.startedAt, data.finishedAt)}
           </span>
           <span className="spacer" />
@@ -79,9 +79,11 @@ export function RunDetailPage() {
           <NavLink to="review" className="btn btn-sm">
             {t.runDetail.reviewMode}
           </NavLink>
+          {/* select-sm, а не inline-висота: з базовим padding .select текст у 22px обрізався згори. */}
           <select
-            className="select"
-            style={{ width: 130, height: 22, minHeight: 22, fontSize: 'var(--fs-sm)' }}
+            className="select select-sm"
+            style={{ width: 130 }}
+            aria-label={t.runDetail.exportPlaceholder}
             defaultValue=""
             onChange={(e) => {
               const format = e.target.value;
@@ -138,7 +140,12 @@ export function RunDetailPage() {
 
       <nav className="tabs">
         {tabs.map((tab) => (
-          <NavLink key={tab.to} to={tab.to} className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}>
+          <NavLink
+            key={tab.to}
+            to={tab.to}
+            title={tab.hint}
+            className={({ isActive }) => `tab ${isActive ? 'active' : ''}`}
+          >
             {tab.label}
           </NavLink>
         ))}

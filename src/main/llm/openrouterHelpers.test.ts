@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { reportFindingTool } from './prompts';
+import { reportFindingTool, reportFindingToolV2 } from './prompts';
 import { strictifySchema, stripOptionalNulls, type JsonSchema } from './providers/jsonSchema';
 import { SseParser } from './providers/sse';
 
@@ -53,14 +53,50 @@ describe('strictifySchema', () => {
     const props = strict.properties as Record<string, JsonSchema>;
     expect(props.clause_no).toEqual({ type: 'string' });
     expect(props.gap?.type).toEqual(['string', 'null']);
-    // enum без null відкинув би null навіть при type: [..., 'null'].
-    expect(props.severity?.enum).toContain(null);
+    // Перелічення стає nullable лише обгорткою anyOf — null усередині enum разом із
+    // type-масивом Anthropic відхиляв («400 Provider returned error» на кожному судженні).
+    expect(props.severity?.enum).toBeUndefined();
+    expect(props.severity?.anyOf).toEqual([
+      { type: 'string', enum: ['critical', 'major', 'minor', 'recommendation', 'none'] },
+      { type: 'null' },
+    ]);
+    expect(JSON.stringify(props.severity)).not.toContain('null,');
     expect(props.verdict?.enum).not.toContain(null);
 
     const evidenceItem = (props.evidence?.items ?? {}) as JsonSchema;
     expect(evidenceItem.additionalProperties).toBe(false);
     expect(evidenceItem.required).toEqual(['quote', 'page']);
     expect((evidenceItem.properties as Record<string, JsonSchema>).page?.type).toEqual(['integer', 'null']);
+  });
+
+  it('judge.v2: outside_evidence стає обовʼязковим nullable-рядком, а null потім прибирається', () => {
+    const strict = strictifySchema(reportFindingToolV2.inputSchema as JsonSchema);
+    expect(strict.required).toContain('outside_evidence');
+    const props = strict.properties as Record<string, JsonSchema>;
+    expect(props.outside_evidence).toEqual({
+      type: ['string', 'null'],
+      description:
+        'What must be verified outside this document — records, on-site observation — according to the clause markers and legend. Omit when nothing.',
+    });
+    // Решта схеми — як у v1: нове поле нічого не зламало у строгій копії.
+    expect(props.severity).toEqual(
+      (strictifySchema(reportFindingTool.inputSchema as JsonSchema).properties as Record<string, JsonSchema>).severity,
+    );
+
+    const finding = {
+      clause_no: '10.3',
+      verdict: 'compliant',
+      confidence: 0.9,
+      rationale: 'x',
+      evidence: [],
+    };
+    const schema = reportFindingToolV2.inputSchema as JsonSchema;
+    // Модель у строгому режимі мусить повернути поле — `null`, коли перевіряти нічого.
+    expect(stripOptionalNulls({ ...finding, outside_evidence: null }, schema)).toEqual(finding);
+    expect(stripOptionalNulls({ ...finding, outside_evidence: 'Check records.' }, schema)).toEqual({
+      ...finding,
+      outside_evidence: 'Check records.',
+    });
   });
 
   it('відкидає ключові слова, які строгі режими не приймають', () => {

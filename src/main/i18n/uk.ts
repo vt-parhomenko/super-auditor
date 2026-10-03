@@ -29,7 +29,7 @@ export const uk: MainMessages = {
   },
 
   export: {
-    title: (runId) => `Аудит — прогін ${runId}`,
+    title: (runId) => `Аудит — перевірка ${runId}`,
     summary: 'Підсумок',
     applicable: (count) => `Застосовних вимог: ${count}`,
     assessed: (count) => `Оцінено: ${count}`,
@@ -41,6 +41,8 @@ export const uk: MainMessages = {
     verdictLabel: 'Вердикт',
     gapLabel: 'Чого бракує',
     recommendationLabel: 'Рекомендація',
+    outsideEvidenceLabel: 'Перевірити поза документом',
+    outsideEvidenceTitle: 'Перевірити на аудиті — поза документами',
     page: (page) => `стор. ${page}`,
     gapsTitle: 'Прогалини — вимоги без жодного доказу',
     colClause: 'Вимога',
@@ -69,8 +71,8 @@ export const uk: MainMessages = {
       `Жодне з ${count} ${n(count, 'завдання', 'завдань', 'завдань')} не виконалось. Перша помилка: ${first}`,
     partial: (count) => `Частково: не виконано завдань ${count}`,
     unknownCause: 'причина невідома',
-    crashed: (runId, message) => `Прогін ${runId} впав: ${message}`,
-    notFound: (runId) => `Прогін ${runId} не знайдено`,
+    crashed: (runId, message) => `Перевірка ${runId} впала: ${message}`,
+    notFound: (runId) => `Перевірку ${runId} не знайдено`,
     specVersionNotFound: (specVersionId) => `Версію специфікації ${specVersionId} не знайдено`,
     noDocuments: 'Не вибрано жодного документа',
     emptyRegistry: 'Реєстр вимог порожній — спершу побудуйте його (Stage 1)',
@@ -91,12 +93,15 @@ export const uk: MainMessages = {
     reviewedKept: (failed) =>
       `Не вдалося обробити ${failed} ${n(failed, 'сторінку', 'сторінки', 'сторінок')}. Вичитаний реєстр вимог лишився без змін — ` +
       'усуньте причину й запустіть витягування ще раз.',
+    markerLegendFailed: (detail) =>
+      'Реєстр вимог збережено, але розшифровку позначок стандарту цього разу прочитати не вдалося. ' +
+      `Щоб спробувати ще раз, запустіть витягування повторно. (${detail})`,
   },
 
   llm: {
     insufficientCredit: (provider, topUpUrl, detail) =>
       `Вичерпано баланс ${provider}. Поповніть рахунок ${topUpUrl ? `на ${topUpUrl}` : `у ${provider}`} ` +
-      `і натисніть «Продовжити» — прогін відновиться з місця зупинки. (${detail})`,
+      `і натисніть «Продовжити» — перевірка відновиться з місця зупинки. (${detail})`,
     auth: (provider, detail) =>
       `${provider} відхилив ключ API. Перевірте його в Налаштуваннях. (${detail})`,
     notConfigured: (provider) =>
@@ -129,7 +134,7 @@ export const uk: MainMessages = {
   ipc: {
     // Знахідний відмінок: «Специфікацію 42 не знайдено».
     entities: {
-      run: 'Прогін',
+      run: 'Перевірку',
       specification: 'Специфікацію',
       specVersion: 'Версію специфікації',
       clause: 'Вимогу',
@@ -146,11 +151,12 @@ export const uk: MainMessages = {
     integrity: (code) =>
       `Дія суперечить цілісності даних (${code}) — можливо, запис уже використано в іншому місці`,
     orchestratorMissing:
-      'Оркестратор ще не підключено — операції прогону недоступні в цій збірці',
+      'Оркестратор ще не підключено — операції перевірок недоступні в цій збірці',
   },
 
-  documents: {
-    usedInRuns: (count) => `Документ використано у прогонах (${count}) — спочатку видаліть їх`,
+  library: {
+    invalidTarget: (value) =>
+      `Немає що видаляти: очікували специфікацію, версію специфікації, документ або версію документа, отримано ${value}`,
   },
 
   clauseEditing: {
@@ -161,6 +167,8 @@ export const uk: MainMessages = {
     registryEmpty: 'Реєстр порожній — немає чого позначати вичитаним',
     registryNotReviewed: (unconfirmed, flagged) =>
       `Реєстр не вичитано до кінця: ${unconfirmed} без підтвердження, ${flagged} позначено прапорцем`,
+    markersInvalid: (maxCount, maxLength) =>
+      `Позначки стандарту — це список щонайбільше з ${maxCount} коротких кодів, кожен непорожній і не довший за ${maxLength} символів`,
   },
 
   docProfiles: {
@@ -197,10 +205,10 @@ export const uk: MainMessages = {
   },
 
   runs: {
-    emptyConfig: 'Порожня конфігурація прогону',
+    emptyConfig: 'Порожня конфігурація перевірки',
     registryNotReviewed:
-      'Реєстр вимог не вичитано — прогін заблоковано до підтвердження Stage 1',
-    noDocuments: 'Не вибрано жодного документа для прогону',
+      'Реєстр вимог не вичитано — перевірку заблоковано до підтвердження Stage 1',
+    noDocuments: 'Не вибрано жодного документа для перевірки',
     siteProfileMissing: (siteProfileId) => `Профіль виробництва ${siteProfileId} не знайдено`,
   },
 

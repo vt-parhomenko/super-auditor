@@ -52,6 +52,8 @@ export const en = {
     verdictLabel: 'Verdict',
     gapLabel: 'What is missing',
     recommendationLabel: 'Recommendation',
+    outsideEvidenceLabel: 'Verify outside the document',
+    outsideEvidenceTitle: 'To verify at the audit — outside the documents',
     page: (page: number) => `p. ${page}`,
     gapsTitle: 'Gaps — clauses without any evidence',
     colClause: 'Clause',
@@ -110,6 +112,13 @@ export const en = {
     reviewedKept: (failed: number) =>
       `${failed} ${n(failed, 'page', 'pages')} could not be processed. The reviewed clause registry was kept unchanged — ` +
       'fix the cause and run the extraction again.',
+    /**
+     * Легенда позначок не прочитана — реєстр уже збережено, тож це лише попередження.
+     * Без «показано без пояснень»: відома легенда цієї ж версії могла лишитись.
+     */
+    markerLegendFailed: (detail: string) =>
+      'The clause registry was saved, but the standard’s explanation of its clause markers could not be read this time. ' +
+      `Run the extraction again to retry. (${detail})`,
   },
 
   /**
@@ -175,9 +184,10 @@ export const en = {
       'The run orchestrator is not connected — run operations are not available in this build',
   },
 
-  documents: {
-    usedInRuns: (count: number) =>
-      `The document is used in ${count} ${n(count, 'run', 'runs')} — delete ${n(count, 'it', 'them')} first`,
+  /** Видалення специфікацій і документів (`library:*`). */
+  library: {
+    invalidTarget: (value: string) =>
+      `Nothing to delete: expected a specification, a specification version, a document or a document version, got ${value}`,
   },
 
   clauseEditing: {
@@ -188,6 +198,8 @@ export const en = {
     registryEmpty: 'The registry is empty — there is nothing to mark as reviewed',
     registryNotReviewed: (unconfirmed: number, flagged: number) =>
       `The registry is not fully reviewed: ${unconfirmed} unconfirmed, ${flagged} flagged`,
+    markersInvalid: (maxCount: number, maxLength: number) =>
+      `Standard markers must be a list of at most ${maxCount} short codes, each non-empty and at most ${maxLength} characters long`,
   },
 
   docProfiles: {

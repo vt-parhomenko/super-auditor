@@ -3,16 +3,17 @@
  * з `@shared/domain` і навпаки.
  *
  * Тут же — і тільки тут — парситься/серіалізується JSON колонок
- * (`modules`, `certifications`, `products`, `processes`, `candidate_clauses`,
- * `section_summaries`) і конвертуються булеві 0/1.
+ * (`modules`, `markers`, `marker_legend`, `certifications`, `products`,
+ * `processes`, `candidate_clauses`, `section_summaries`) і конвертуються булеві 0/1.
  *
  * Значення перелічень із БД кастяться без рантайм-перевірки: CHECK-обмеження
- * в схемі вже гарантують домен. Виняток — JSON-масиви, які CHECK не покриває:
- * `modules` фільтруємо явно.
+ * в схемі вже гарантують домен. Виняток — JSON-колонки, які CHECK не покриває:
+ * `modules`, `markers` і `marker_legend` фільтруємо явно.
  */
 
 import {
   MODULES,
+  normalizeMarkers,
   type AuditRunDto,
   type BlobDto,
   type ClauseApplicabilityDto,
@@ -30,6 +31,7 @@ import {
   type ExtractionMethod,
   type FindingDto,
   type HumanReviewDto,
+  type MarkerLegendItem,
   type Module,
   type Obligation,
   type PageRange,
@@ -92,6 +94,31 @@ export function parseStringRecord(raw: string | null | undefined): Record<string
 export function parseModules(raw: string | null | undefined): Module[] {
   const all: readonly string[] = MODULES;
   return parseStringArray(raw).filter((m): m is Module => all.includes(m));
+}
+
+/** Позначки вимоги: та сама нормалізація, що й на вході (`normalizeMarkers`). */
+export function parseMarkers(raw: string | null | undefined): string[] {
+  return normalizeMarkers(parseStringArray(raw));
+}
+
+/**
+ * Легенда позначок. NULL і порожній масив — «легенди немає» (null): UI не
+ * повинен малювати порожній рядок легенди. Биті пункти відкидаються поштучно.
+ */
+export function parseMarkerLegend(raw: string | null | undefined): MarkerLegendItem[] | null {
+  const parsed = parseJson(raw, null);
+  if (!Array.isArray(parsed)) return null;
+  const items: MarkerLegendItem[] = [];
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    const code = typeof record.code === 'string' ? record.code.trim() : '';
+    if (code.length === 0) continue;
+    const label = typeof record.label === 'string' && record.label.trim() ? record.label.trim() : code;
+    const meaning = typeof record.meaning === 'string' && record.meaning.trim() ? record.meaning.trim() : null;
+    items.push({ code, label, meaning });
+  }
+  return items.length > 0 ? items : null;
 }
 
 /**
@@ -183,6 +210,8 @@ export interface SpecVersionRow {
   extraction_id: number | null;
   effective_from: string | null;
   clauses_status: string;
+  /** JSON `MarkerLegendItem[]`; NULL — легенди немає (і в усіх версій до міграції 4). */
+  marker_legend: string | null;
   /** Підзапит. */
   clause_count: number;
   /** Підзапит: review_status IN ('confirmed','edited'). */
@@ -199,6 +228,8 @@ export interface ClauseRow {
   topic: string | null;
   requirement_text: string;
   modules: string;
+  /** JSON-масив позначок стандарту (міграція 4). */
+  markers: string;
   obligation: string | null;
   page_from: number | null;
   page_to: number | null;
@@ -290,6 +321,8 @@ export interface FindingRow {
   rationale: string;
   gap: string | null;
   recommendation: string | null;
+  /** Міграція 5. */
+  outside_evidence: string | null;
   created_at: string;
 }
 
@@ -446,6 +479,7 @@ export function toSpecVersionDto(row: SpecVersionRow): SpecVersionDto {
     clausesStatus: row.clauses_status as ClausesStatus,
     clauseCount: toNum(row.clause_count),
     reviewedClauseCount: toNum(row.reviewed_clause_count),
+    markerLegend: parseMarkerLegend(row.marker_legend),
   };
 }
 
@@ -471,6 +505,7 @@ export function toClauseDto(row: ClauseRow): ClauseDto {
     topic: row.topic,
     requirementText: row.requirement_text,
     modules: parseModules(row.modules),
+    markers: parseMarkers(row.markers),
     obligation: row.obligation === null ? null : (row.obligation as Obligation),
     pageFrom: toNullableNum(row.page_from),
     pageTo: toNullableNum(row.page_to),
@@ -610,6 +645,7 @@ export function toFindingDto(
     rationale: row.rationale,
     gap: row.gap,
     recommendation: row.recommendation,
+    outsideEvidence: row.outside_evidence ?? null,
     createdAt: row.created_at,
     evidence,
     review,
